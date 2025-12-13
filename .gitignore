@@ -1,0 +1,190 @@
+# =============================================================================
+# Local Telemetry Platform - .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# User-requested exclusions (planning/reporting folders)
+# -----------------------------------------------------------------------------
+/plans/
+/reports/
+/legacy/
+/reports_repo_hygiene/
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytest_cache/
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+
+# Linters
+.ruff_cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# -----------------------------------------------------------------------------
+# Environments
+# -----------------------------------------------------------------------------
+.env
+.env.*
+*.env
+.venv/
+venv/
+ENV/
+env/
+env.bak/
+venv.bak/
+.python-version
+.conda/
+
+# -----------------------------------------------------------------------------
+# IDE / Editors
+# -----------------------------------------------------------------------------
+# VSCode (keep settings.json for shared config if desired)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# JetBrains
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Vim
+*.swp
+*.swo
+*~
+.*.swp
+
+# Emacs
+*~
+\#*\#
+.\#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------------------------------------------------------
+# OS generated files
+# -----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+nul
+
+# -----------------------------------------------------------------------------
+# Test/Debug output artifacts
+# -----------------------------------------------------------------------------
+output.txt
+test_results.txt
+*.log
+logs/
+tmp/
+temp/
+
+# JUnit reports (generated)
+reports/*.xml
+junit_*.xml
+
+# -----------------------------------------------------------------------------
+# Database and runtime data
+# -----------------------------------------------------------------------------
+*.sqlite
+*.sqlite3
+*.db
+*.lmdb
+*.mdb
+
+# Telemetry storage directories (runtime data, not source)
+# These are created by setup_storage.py at runtime locations like D:\agent-metrics
+# Do NOT track runtime telemetry data
+
+# -----------------------------------------------------------------------------
+# Secrets and credentials (CRITICAL - never commit these)
+# -----------------------------------------------------------------------------
+*.pem
+*.key
+*.crt
+*credentials*.json
+*secret*
+*token*
+.secrets/
+secrets/
+
+# Google service account keys
+*-service-account*.json
+service-account*.json
+
+# -----------------------------------------------------------------------------
+# Build and release
+# -----------------------------------------------------------------------------
+release/
+*.tar.gz
+*.zip
+
+# -----------------------------------------------------------------------------
+# Documentation build output
+# -----------------------------------------------------------------------------
+docs/_build/
+site/
+/.claude
