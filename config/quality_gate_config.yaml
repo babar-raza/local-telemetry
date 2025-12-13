@@ -1,0 +1,165 @@
+# Quality Gate Configuration
+#
+# Defines validation rules for agent task completion quality gates.
+# Used by scripts/quality_gate.py to validate deliverables against task specs.
+
+# Severity levels (in order of importance)
+severity_levels:
+  - CRITICAL  # Must fix before marking task complete
+  - HIGH      # Should fix before marking task complete
+  - MEDIUM    # Should address but not blocking
+  - LOW       # Nice to have
+
+# Which severity levels block task completion
+blocking_severities:
+  - CRITICAL
+  - HIGH
+
+# Test execution configuration
+test_timeout_seconds: 300  # 5 minutes max per test suite
+
+# File type specific rules
+file_type_rules:
+  python:
+    extensions: [".py"]
+    min_lines_default: 50
+    max_lines_default: 1000
+    require_docstring: true
+    require_tests: true
+    test_file_pattern: "test_*.py"
+
+  shell:
+    extensions: [".sh", ".bash"]
+    min_lines_default: 20
+    max_lines_default: 500
+    require_shebang: true
+
+  documentation:
+    extensions: [".md", ".rst", ".txt"]
+    min_lines_default: 50
+    max_lines_default: 2000
+    require_title: true
+
+  config:
+    extensions: [".yaml", ".yml", ".json", ".toml"]
+    min_lines_default: 10
+    max_lines_default: 500
+    validate_syntax: true
+
+# Task type specific gate rules
+task_type_rules:
+  documentation:
+    severity: HIGH
+    checks:
+      - file_exists
+      - line_count
+      - valid_markdown
+    require_all_deliverables: true
+
+  feature:
+    severity: CRITICAL
+    checks:
+      - file_exists
+      - line_count
+      - tests_exist
+      - tests_pass
+    require_all_deliverables: true
+    min_test_coverage: 80
+
+  bugfix:
+    severity: CRITICAL
+    checks:
+      - file_exists
+      - tests_exist
+      - tests_pass
+    require_all_deliverables: true
+    require_regression_test: true
+
+  refactoring:
+    severity: HIGH
+    checks:
+      - file_exists
+      - tests_exist
+      - tests_pass
+      - no_behavior_change
+    require_all_deliverables: true
+
+# Line count validation rules
+line_count_rules:
+  # Allow some flexibility in line counts
+  tolerance_percentage: 10  # ±10% of specified range is acceptable
+
+  # Minimum lines for different file types
+  min_lines_by_type:
+    script: 50
+    test: 100
+    documentation: 50
+    config: 10
+
+  # Warn if file is suspiciously short
+  warning_thresholds:
+    script: 30
+    test: 50
+    documentation: 30
+
+# Acceptance check execution rules
+acceptance_check_rules:
+  # Run acceptance checks from task spec
+  execute_bash_checks: true
+  timeout_per_check_seconds: 60
+  continue_on_failure: true  # Run all checks even if some fail
+
+  # Check execution environment
+  required_env_vars: []
+  forbidden_network_access: true  # Checks should not require network
+
+# Report generation rules
+report_rules:
+  # What to include in report
+  include_passed_checks: true
+  include_file_sizes: true
+  include_timestamps: true
+
+  # Report formats
+  default_format: "text"
+  available_formats:
+    - text
+    - json
+    - yaml
+
+  # Report output
+  report_directory: "reports/quality_gates"
+  report_filename_pattern: "gate_{task_id}_{agent_id}_{timestamp}.txt"
+
+# Manual override rules
+manual_override_rules:
+  # Allow manual override only with justification
+  require_justification: true
+  justification_min_length: 100
+
+  # Override must be documented
+  override_log_file: "reports/quality_gate_overrides.log"
+
+  # Who can override
+  require_approval_for_critical: true
+  approved_overriders:
+    - senior_engineer
+    - tech_lead
+
+# Logging configuration
+logging:
+  level: INFO
+  log_file: "logs/quality_gate.log"
+  log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+
+# Integration with other tools
+integrations:
+  todo_write:
+    enabled: true
+    block_completion_on_failure: true
+    update_status_on_pass: false  # Let workflow handle status updates
+
+  verification_framework:
+    enabled: true
+    run_verification_after_gate: true
+    verification_script: "scripts/verify_analysis.py"

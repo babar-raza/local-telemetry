@@ -1,0 +1,141 @@
+# Verification Checklist Configuration
+#
+# Defines patterns and rules for verifying claims in analysis documents.
+# Used by scripts/verify_analysis.py to systematically verify factual claims.
+
+# Minimum verification rate to pass (0.0 to 1.0)
+min_verification_rate: 0.8  # 80% of claims must be verified
+
+# Require evidence for all verified claims
+require_evidence: true
+
+# Claim pattern definitions
+# Each pattern is a regex that identifies claims in analysis documents
+claim_patterns:
+  # File existence claims
+  file_exists:
+    - '(?:File|Document|Script)\s+`([^`]+)`\s+(?:exists|present|found|created)'
+    - '`([^`]+)`\s+(?:exists|was created|is present)'
+    - '(?:Created|Wrote|Generated)\s+`([^`]+)`'
+    - 'deliverable.*?`([^`]+)`'
+
+  # Line count claims
+  line_count:
+    - '`([^`]+)`.*?(\d+)\s+lines'
+    - '(\d+)\s+lines.*?`([^`]+)`'
+    - '`([^`]+)`.*?\((\d+)-\d+\s+lines\)'  # Range format
+    - '(\d+)\s+lines?.*?in\s+`([^`]+)`'
+
+  # Missing file claims
+  missing_file:
+    - '`([^`]+)`.*?(?:missing|not found|does not exist|absent)'
+    - '(?:missing|not found).*?`([^`]+)`'
+    - '(?:Failed to|Could not|Unable to)\s+(?:find|locate).*?`([^`]+)`'
+
+  # Test result claims
+  test_passed:
+    - '(?:test|tests).*?`([^`]+)`.*?(?:passed|pass|succeeded|OK)'
+    - '`([^`]+)`.*?(?:test|tests).*?(?:passed|OK)'
+
+  test_failed:
+    - '(?:test|tests).*?`([^`]+)`.*?(?:failed|fail|error|FAILED)'
+    - '`([^`]+)`.*?(?:test|tests).*?(?:failed|FAILED)'
+
+  # Agent output claims
+  agent_output:
+    - 'Agent\s+(\w+).*?(?:produced|created|generated|output)'
+    - '(?:Agent|agent_id):\s*(\w+)'
+
+# Verification methods configuration
+verification_methods:
+  filesystem_check:
+    description: "Check file existence on filesystem"
+    timeout_seconds: 5
+
+  line_count_check:
+    description: "Count lines in file"
+    timeout_seconds: 10
+    tolerance_percentage: 5  # Allow 5% variance in line counts
+
+  test_execution_check:
+    description: "Execute tests to verify results"
+    timeout_seconds: 300
+    enabled: false  # Disabled by default for safety
+
+  agent_output_check:
+    description: "Verify agent output content"
+    timeout_seconds: 30
+    check_agent_logs: true
+    log_directory: "logs"
+
+# Verification evidence requirements
+evidence_requirements:
+  file_exists:
+    - "Full file path verified"
+    - "File modification timestamp"
+
+  line_count:
+    - "Exact line count"
+    - "Verification timestamp"
+
+  test_result:
+    - "Test execution output"
+    - "Exit code"
+
+# Error handling
+error_handling:
+  # Continue verification even if some claims fail
+  continue_on_failure: true
+
+  # Maximum number of verification errors before stopping
+  max_errors: 50
+
+  # Log all verification attempts
+  log_all_attempts: true
+  log_file: "logs/verification.log"
+
+# Output configuration
+output:
+  # Include verification metadata in reports
+  include_metadata: true
+  include_timestamps: true
+  include_evidence: true
+
+  # Verbosity levels: minimal, standard, detailed
+  verbosity: "standard"
+
+  # Highlight unverified claims
+  highlight_unverified: true
+  highlight_failed: true
+
+# Integration with other tools
+integrations:
+  quality_gate:
+    enabled: true
+    run_before_quality_gate: false
+    run_after_quality_gate: true
+
+  ci_cd:
+    enabled: true
+    fail_ci_on_unverified: true
+    fail_ci_on_below_threshold: true
+
+# Claim type priorities
+# Higher priority claims should be verified first
+claim_priorities:
+  file_missing: 1  # Highest priority
+  file_exists: 2
+  line_count: 3
+  test_failed: 2
+  test_passed: 4
+  agent_output: 5  # Lowest priority
+
+# Exemptions
+# Claims matching these patterns will not be verified
+exempted_claims:
+  - pattern: 'example\s+`([^`]+)`'
+    reason: "Example files don't need verification"
+  - pattern: 'hypothetical\s+`([^`]+)`'
+    reason: "Hypothetical scenarios don't need verification"
+  - pattern: 'future\s+`([^`]+)`'
+    reason: "Future work doesn't need verification"
