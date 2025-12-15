@@ -1,5 +1,7 @@
 # Quality Gates
 
+See `../reference/cli.md` for the full command/flag list; this guide focuses on how to run gates and interpret results. Example file paths below are illustrative—substitute your actual deliverables.
+
 ## Overview
 
 Quality gates are systematic validation checks that run after agent task completion to ensure deliverables meet specifications before marking tasks "done". This prevents incomplete work from passing as complete.

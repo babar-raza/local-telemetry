@@ -1,5 +1,7 @@
 # Analysis Verification Protocol
 
+CLI flags are documented in `../reference/cli.md`. Use this guide for workflow and interpretation. Examples use placeholder file names—replace with your actual deliverables.
+
 ## Overview
 
 The Analysis Verification Protocol provides systematic verification of claims made in analysis documents before publication. This prevents unverified claims, assumptions stated as facts, and incomplete evidence from being published as authoritative analysis.
@@ -510,7 +512,7 @@ done
 - **Configuration reference**: `config/verification_checklist.yaml`
 - **Implementation**: `scripts/verify_analysis.py`
 - **Test suite**: `tests/test_verify_analysis.py`
-- **Quality gates integration**: `docs/QUALITY_GATES.md`
+- **Quality gates integration**: `../guides/quality-gates.md`
 
 ---
 

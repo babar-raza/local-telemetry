@@ -1,5 +1,7 @@
 # Troubleshooting Guide
 
+CLI/flags live in `../reference/cli.md`; this guide maps symptoms to checks/fixes.
+
 ## Installation Issues
 
 ### "No module named 'telemetry'"

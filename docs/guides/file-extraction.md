@@ -1,5 +1,7 @@
 # Automatic Agent Output Extraction
 
+Note: CLI flags/options are canonicalized in `../reference/cli.md`. Use this guide for workflow and validation steps. Example file names are illustrative only.
+
 ## Overview
 
 Automatically extracts deliverables from agent output logs with validation against task specifications. Prevents documentation and code loss when Write tool fails.

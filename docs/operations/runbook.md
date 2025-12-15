@@ -1,5 +1,7 @@
 # Telemetry Platform Runbook
 
+Note: CLI/flags are canonical in `../reference/cli.md`. This runbook focuses on actions and sequencing.
+
 **System:** Local Telemetry Platform
 **Owner:** Local Telemetry Team
 **Last Updated:** 2025-12-11
