@@ -1,209 +1,321 @@
 # Local Telemetry Platform
 
-A Python library for tracking multi-agent runs, metrics, and performance with local-first storage.
+A Python library for tracking agent runs, metrics, and performance with dual-write resilience and optional remote API posting.
 
-## Features
+## The Problem
 
-- **Run Tracking**: Record start/end times, status, and metrics for agent executions
-- **Event Logging**: Log checkpoint events during runs
-- **Dual-Write Storage**: NDJSON for crash resilience + SQLite for structured queries
-- **Optional API Posting**: Fire-and-forget to remote endpoints (Google Sheets)
-- **Never Crashes**: All telemetry operations are wrapped in error handling
-- **Cross-Platform**: Windows, Linux, and Docker support
-- **Concurrent Safe**: File locking and WAL mode for concurrent writes
+When running autonomous agents (LLM-powered automation, data pipelines, batch processors), you need visibility into:
 
-## Quick Start
+- **What happened?** - Did the agent succeed or fail? How long did it take?
+- **What was processed?** - How many items discovered, succeeded, failed?
+- **When things go wrong** - What was the error? Can we trace it back to a specific run?
+- **Cross-system correlation** - Which git commit came from which agent run?
 
-### 1. Install
+Traditional logging falls short because:
+- Logs are unstructured and hard to query
+- No built-in support for run boundaries (start/end)
+- No metrics aggregation across runs
+- Lost data if the agent crashes mid-run
 
-```bash
-pip install -e .
+## The Solution
 
-# With development dependencies
-pip install -e ".[dev]"
-```
-
-### 2. Initialize Storage
-
-```bash
-python scripts/setup_storage.py
-python scripts/setup_database.py
-```
-
-### 3. Verify Installation
-
-```bash
-python scripts/validate_installation.py
-```
-
-### 4. Use in Your Code
+Local Telemetry provides **structured run tracking** with **crash resilience**:
 
 ```python
 from telemetry import TelemetryClient
 
 client = TelemetryClient()
 
-# Context manager (recommended)
-with client.track_run("my-agent", "my-job") as ctx:
-    ctx.log_event("checkpoint", {"step": 1})
-    ctx.set_metrics(items_discovered=10, items_succeeded=10)
-    # ... do work ...
-# Auto-ends with status="success"
-# If exception: auto-ends with status="failed"
+with client.track_run("my_agent", "process_files") as ctx:
+    ctx.log_event("start", {"input": "data.csv"})
+
+    # Your agent logic here...
+    items = process_files()
+
+    ctx.set_metrics(
+        items_discovered=len(items),
+        items_succeeded=len([i for i in items if i.ok]),
+        items_failed=len([i for i in items if not i.ok])
+    )
+# Automatically ends with status="success"
+# If an exception occurs, ends with status="failed"
 ```
 
-Or use explicit start/end:
+## Key Features
+
+### Dual-Write Storage
+Every write goes to **two destinations** for resilience:
+- **NDJSON files** (`raw/events_YYYYMMDD.ndjson`) - Append-only, crash-resilient, human-readable
+- **SQLite database** (`db/telemetry.sqlite`) - Structured queries, WAL mode for concurrent access
+
+### Never Crashes Your Agent
+The library is designed to **never interrupt your agent's work**:
+- Configuration errors become warnings
+- Write failures are logged but don't throw
+- API failures retry silently in the background
+
+### Git Commit Tracking
+Link agent runs to their resulting git commits:
+```python
+# After your agent commits changes
+success, msg = client.associate_commit(
+    run_id=run_id,
+    commit_hash="a1b2c3d4...",
+    commit_source="llm",  # 'manual', 'llm', or 'ci'
+    commit_author="Claude Code <noreply@anthropic.com>"
+)
+```
+
+### Optional API Posting
+Fire-and-forget posting to remote APIs (Google Sheets, webhooks, etc.):
+- Automatic retry with exponential backoff (1s, 2s, 4s)
+- Tracks posting status per run
+- Batch retry for failed posts
+
+### Cross-Platform Support
+Works on Windows, Linux, macOS, Docker, and Kubernetes with automatic path detection.
+
+## Quick Start
+
+### 1. Install
+
+```bash
+git clone <repo-url> local-telemetry
+cd local-telemetry
+pip install -e .
+```
+
+### 2. Initialize Storage
+
+```bash
+python scripts/setup_storage.py
+```
+
+Or set environment variables:
+```bash
+export TELEMETRY_BASE_DIR=/path/to/telemetry
+# or on Windows: set TELEMETRY_BASE_DIR=D:\agent-metrics
+```
+
+### 3. Instrument Your Agent
 
 ```python
-run_id = client.start_run("my-agent", "my-job")
-client.log_event(run_id, "progress", {"status": "working"})
-client.end_run(run_id, status="success", items_succeeded=5)
+from telemetry import TelemetryClient
+
+client = TelemetryClient()
+
+# Option 1: Context manager (recommended)
+with client.track_run("agent_name", "job_type") as ctx:
+    ctx.log_event("checkpoint", {"step": 1})
+    ctx.set_metrics(items_discovered=10, items_succeeded=10)
+
+# Option 2: Explicit start/end
+run_id = client.start_run("agent_name", "job_type")
+client.log_event(run_id, "checkpoint", {"step": 1})
+client.end_run(run_id, status="success", items_succeeded=10)
+```
+
+### 4. Query Your Data
+
+```bash
+# Recent runs
+sqlite3 db/telemetry.sqlite "SELECT run_id, status, duration_ms FROM agent_runs ORDER BY start_time DESC LIMIT 10;"
+
+# Success rate by agent
+sqlite3 db/telemetry.sqlite "SELECT agent_name, COUNT(*) as runs, SUM(CASE WHEN status='success' THEN 1 ELSE 0 END) as successes FROM agent_runs GROUP BY agent_name;"
+```
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        TelemetryClient                          │
+│                   (Main Public Interface)                       │
+└─────────────┬───────────────────────────────────────┬───────────┘
+              │                                       │
+              ▼                                       ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│      NDJSONWriter       │             │    DatabaseWriter       │
+│   (Local Resilience)    │             │  (Structured Queries)   │
+└─────────────────────────┘             └─────────────────────────┘
+              │                                       │
+              ▼                                       ▼
+┌─────────────────────────┐             ┌─────────────────────────┐
+│  {base}/raw/*.ndjson    │             │  {base}/db/*.sqlite     │
+│  Daily rotating files   │             │  WAL mode database      │
+└─────────────────────────┘             └─────────────────────────┘
+```
+
+### Storage Layout
+
+```
+{base}/
+├── raw/                           # NDJSON logs (crash-resilient)
+│   ├── events_20251215.ndjson
+│   └── events_20251214.ndjson
+├── db/                            # SQLite database
+│   ├── telemetry.sqlite
+│   ├── telemetry.sqlite-wal       # Write-ahead log
+│   └── telemetry.sqlite-shm       # Shared memory
+└── backups/                       # Automated backups
 ```
 
 ## Configuration
 
-The library auto-detects storage location or uses environment variables:
+All configuration via environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TELEMETRY_BASE_DIR` | Base storage directory | Auto-detected |
-| `AGENT_METRICS_DIR` | Legacy alias | - |
-| `TELEMETRY_DB_PATH` | Direct database path | `{base}/db/telemetry.sqlite` |
-| `METRICS_API_ENABLED` | Enable API posting | `true` |
+| `TELEMETRY_DB_PATH` | Direct database path (overrides base) | `{base}/db/telemetry.sqlite` |
+| `TELEMETRY_NDJSON_DIR` | NDJSON directory override | `{base}/raw` |
+| `METRICS_API_URL` | Remote API endpoint | None (disabled) |
+| `METRICS_API_TOKEN` | API authentication token | None |
+| `METRICS_API_ENABLED` | Enable/disable API posting | `true` |
+| `AGENT_OWNER` | Default agent owner | None |
 
-Auto-detection checks (in order):
-- `/agent-metrics` (Docker/Linux)
-- `D:\agent-metrics` (Windows)
-- `C:\agent-metrics` (Windows fallback)
-- `~/.telemetry` (User home)
+See [docs/reference/config.md](docs/reference/config.md) for complete configuration reference.
 
-See [docs/configuration.md](docs/configuration.md) for full options.
+## Available Metrics
 
-## Storage
+Track these fields on every run:
 
-### Directory Structure
+| Field | Type | Description |
+|-------|------|-------------|
+| `items_discovered` | int | Total items found/processed |
+| `items_succeeded` | int | Successfully processed items |
+| `items_failed` | int | Failed items |
+| `input_summary` | str | Description of input |
+| `output_summary` | str | Description of output |
+| `error_summary` | str | Error message if failed |
+| `metrics_json` | str | Arbitrary JSON for custom metrics |
+| `insight_id` | str | Link to originating insight |
+| `product` | str | Product being processed |
+| `platform` | str | Platform identifier |
+| `git_repo` | str | Git repository URL |
+| `git_branch` | str | Git branch name |
+| `git_commit_hash` | str | Associated commit SHA |
 
-```
-{base}/
-├── raw/           # NDJSON logs (events_YYYYMMDD.ndjson)
-├── db/            # SQLite (telemetry.sqlite)
-├── reports/       # Generated reports
-├── exports/       # CSV exports
-├── config/        # Config files
-└── logs/          # System logs
-```
+## Scripts
 
-### Query Data
+| Script | Purpose |
+|--------|---------|
+| `scripts/setup_storage.py` | Initialize storage directories |
+| `scripts/setup_database.py` | Create database schema |
+| `scripts/backup_database.py` | Backup SQLite database |
+| `scripts/recover_database.py` | Recover from NDJSON logs |
+| `scripts/monitor_telemetry_health.py` | Health check monitoring |
+| `scripts/validate_installation.py` | Verify installation |
+| `scripts/diagnose_pragma_settings.py` | Diagnose database PRAGMA settings |
+| `scripts/check_db_integrity.py` | Check database integrity |
 
+## Troubleshooting
+
+### Quick Diagnostics
+
+**Validate installation:**
 ```bash
-# Recent runs
-sqlite3 D:\agent-metrics\db\telemetry.sqlite \
-  "SELECT agent_name, job_type, status FROM agent_runs ORDER BY start_time DESC LIMIT 10;"
-
-# Statistics
-sqlite3 D:\agent-metrics\db\telemetry.sqlite \
-  "SELECT status, COUNT(*) FROM agent_runs GROUP BY status;"
+python scripts/validate_installation.py
 ```
+Checks: environment, storage, database (including PRAGMA settings), configuration, tests.
 
-## Operations
-
+**Diagnose PRAGMA issues:**
 ```bash
-# Health check
-python scripts/monitor_telemetry_health.py
-
-# Backup database
-python scripts/backup_telemetry_db.py
-
-# Performance test
-python scripts/measure_performance.py
+python scripts/diagnose_pragma_settings.py
 ```
+Shows connection-level PRAGMA settings and identifies discrepancies.
 
-## Testing
-
+**Check database integrity:**
 ```bash
-# Run all tests
-pytest
-
-# Run smoke test
-python tests/smoke_test.py
-
-# Run with coverage
-pytest --cov=src/telemetry
+python scripts/check_db_integrity.py
 ```
+Verifies database is not corrupted.
+
+For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+## Documentation
+
+### By Role
+
+| Role | Start Here |
+|------|------------|
+| **Agent Developer** | [docs/getting-started/quickstart-user.md](docs/getting-started/quickstart-user.md) |
+| **Platform Operator** | [docs/getting-started/quickstart-operator.md](docs/getting-started/quickstart-operator.md) |
+| **Contributor** | [docs/getting-started/quickstart-contributor.md](docs/getting-started/quickstart-contributor.md) |
+
+### Guides
+
+- [Instrumentation Guide](docs/guides/instrumentation.md) - Detailed instrumentation patterns
+- [Backup & Restore](docs/guides/backup-and-restore.md) - Data protection
+- [Recovery from NDJSON](docs/guides/recovery-from-ndjson.md) - Disaster recovery
+- [Monitoring & Health](docs/guides/monitoring-and-health.md) - Operational monitoring
+- [Quality Gates](docs/guides/quality-gates.md) - CI/CD integration
+
+### Reference
+
+- [API Reference](docs/reference/api.md) - TelemetryClient API
+- [Configuration](docs/reference/config.md) - Environment variables
+- [CLI Reference](docs/reference/cli.md) - Command-line tools
+- [Schema Reference](docs/reference/schema.md) - Database schema
+- [File Contracts](docs/reference/file-contracts.md) - Storage formats
+
+### Architecture
+
+- [System Architecture](docs/architecture/system.md) - Component overview
+- [Design Decisions](docs/architecture/decisions.md) - ADRs and rationale
 
 ## Project Structure
 
 ```
 local-telemetry/
-├── src/telemetry/       # Main package
-│   ├── client.py        # TelemetryClient, RunContext
-│   ├── config.py        # Configuration loading
-│   ├── database.py      # SQLite writer
-│   ├── local.py         # NDJSON writer
-│   ├── models.py        # Data models
-│   └── schema.py        # Database schema
-├── tests/               # Test suite
-├── scripts/             # Utility scripts
-├── docs/                # Documentation
-└── config/              # Config files
+├── src/telemetry/          # Core library
+│   ├── __init__.py         # Public exports
+│   ├── client.py           # TelemetryClient, RunContext
+│   ├── config.py           # TelemetryConfig
+│   ├── models.py           # RunRecord, RunEvent, APIPayload
+│   ├── database.py         # DatabaseWriter (SQLite)
+│   ├── local.py            # NDJSONWriter
+│   ├── api.py              # APIClient
+│   └── schema.py           # Database schema
+├── scripts/                # Utility scripts
+├── tests/                  # Test suite
+├── docs/                   # Documentation
+│   ├── getting-started/    # Quickstart guides
+│   ├── guides/             # How-to guides
+│   ├── reference/          # API/config reference
+│   ├── architecture/       # System design
+│   └── operations/         # Runbooks
+├── config/                 # Configuration templates
+└── pyproject.toml          # Package configuration
 ```
 
-## Documentation
+## Performance
 
-- [Quick Start](docs/QUICK_START.md) - Get started in 15 minutes
-- [Configuration](docs/configuration.md) - All configuration options
-- [Architecture](docs/architecture.md) - System design and data flow
-- [Development](docs/development.md) - Contributing and testing
-- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues
-- [Runbook](docs/RUNBOOK.md) - Operations guide
+| Operation | Target Latency | Notes |
+|-----------|----------------|-------|
+| `start_run` | < 10ms | NDJSON + DB insert |
+| `log_event` | < 5ms | NDJSON only |
+| `end_run` | < 50ms | NDJSON + DB update + optional API |
+| Throughput | > 20 writes/sec | With WAL mode |
 
-## API Reference
+## Development
 
-### TelemetryClient
+```bash
+# Install dev dependencies
+pip install -e ".[dev]"
 
-```python
-client = TelemetryClient(config=None)  # Auto-loads from environment
+# Run tests
+pytest tests/ -v
 
-# Start/end pattern
-run_id = client.start_run(agent_name, job_type, trigger_type="cli", **kwargs)
-client.log_event(run_id, event_type, payload=None)
-client.end_run(run_id, status="success", **kwargs)
-
-# Context manager pattern
-with client.track_run(agent_name, job_type) as ctx:
-    ctx.log_event(event_type, payload)
-    ctx.set_metrics(items_discovered=N, items_succeeded=N, ...)
-
-# Statistics
-stats = client.get_stats()
+# Run specific test
+pytest tests/test_client.py -v
 ```
-
-### Supported Metrics
-
-```python
-ctx.set_metrics(
-    items_discovered=10,
-    items_succeeded=8,
-    items_failed=2,
-    input_summary="Description of input",
-    output_summary="Description of output",
-    error_summary="Error details if any",
-    metrics_json='{"custom": "data"}',  # Flexible JSON
-    insight_id="link-to-originating-insight",
-    product="product-name",
-    platform="platform-name",
-    product_family="product-family",
-    subdomain="site-subdomain",
-    git_repo="repo-name",
-    git_branch="branch-name",
-)
-```
-
-## Requirements
-
-- Python 3.9-3.13
-- httpx (for API posting)
 
 ## License
 
-MIT License
+See LICENSE file for details.
+
+## Support
+
+- Issues: [GitHub Issues](https://github.com/your-org/local-telemetry/issues)
+- Documentation: [docs/README.md](docs/README.md)
