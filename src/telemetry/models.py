@@ -8,18 +8,26 @@ KEY FIELDS:
 - metrics_json: Flexible JSON field for storing ANY custom metrics
   Store complex nested data, arrays, or arbitrary key-value pairs here.
   Examples: {"severity": "high", "pages_affected": 42, "custom_field": "value"}
+- git_commit_hash: SHA of the git commit associated with this run
+- git_commit_source: How the commit was created ('manual', 'llm', 'ci')
+- git_commit_author: Author of the git commit
+- git_commit_timestamp: When the commit was made (ISO8601)
 """
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 import json
+import uuid
 
 
 # Schema version constant
 # v2: Added insight_id column for SEO Intelligence integration
 # v3: Added product_family and subdomain columns for business context tracking
-SCHEMA_VERSION = 3
+# v4: Added git commit tracking fields (hash, source, author, timestamp)
+# v5: Added website, website_section, item_name for API spec compliance
+# v6: Added event_id with UNIQUE constraint for idempotency
+SCHEMA_VERSION = 6
 
 
 @dataclass
@@ -35,6 +43,7 @@ class RunRecord:
     job_type: str
     trigger_type: str
     start_time: str
+    event_id: str = field(default_factory=lambda: str(uuid.uuid4()))  # v6: Idempotency
     schema_version: int = SCHEMA_VERSION
     agent_owner: Optional[str] = None
     end_time: Optional[str] = None
@@ -52,9 +61,16 @@ class RunRecord:
     platform: Optional[str] = None
     product_family: Optional[str] = None  # Business context: Aspose product family (slides, words, cells, etc.)
     subdomain: Optional[str] = None  # Business context: Site subdomain (products, docs, etc.)
+    website: Optional[str] = None  # API spec: Root domain (e.g., "aspose.com")
+    website_section: Optional[str] = None  # API spec: Subdomain/section (e.g., "products", "docs", "main")
+    item_name: Optional[str] = None  # API spec: Specific page/entity being tracked (e.g., "/slides/net/")
     git_repo: Optional[str] = None
     git_branch: Optional[str] = None
     git_run_tag: Optional[str] = None
+    git_commit_hash: Optional[str] = None  # SHA of the git commit associated with this run
+    git_commit_source: Optional[str] = None  # How commit was created: 'manual', 'llm', 'ci'
+    git_commit_author: Optional[str] = None  # Author of the git commit
+    git_commit_timestamp: Optional[str] = None  # When the commit was made (ISO8601)
     host: Optional[str] = None
     api_posted: int = 0
     api_posted_at: Optional[str] = None
@@ -148,8 +164,15 @@ class APIPayload:
     platform: Optional[str] = None
     product_family: Optional[str] = None  # Business context: Aspose product family
     subdomain: Optional[str] = None  # Business context: Site subdomain
+    website: Optional[str] = None  # API spec: Root domain
+    website_section: Optional[str] = None  # API spec: Subdomain/section
+    item_name: Optional[str] = None  # API spec: Specific page/entity
     git_repo: Optional[str] = None
     git_branch: Optional[str] = None
+    git_commit_hash: Optional[str] = None  # SHA of the git commit
+    git_commit_source: Optional[str] = None  # How commit was created: 'manual', 'llm', 'ci'
+    git_commit_author: Optional[str] = None  # Author of the git commit
+    git_commit_timestamp: Optional[str] = None  # When the commit was made
     host: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -183,8 +206,15 @@ class APIPayload:
             platform=record.platform,
             product_family=record.product_family,
             subdomain=record.subdomain,
+            website=record.website,
+            website_section=record.website_section,
+            item_name=record.item_name,
             git_repo=record.git_repo,
             git_branch=record.git_branch,
+            git_commit_hash=record.git_commit_hash,
+            git_commit_source=record.git_commit_source,
+            git_commit_author=record.git_commit_author,
+            git_commit_timestamp=record.git_commit_timestamp,
             host=record.host,
         )
 

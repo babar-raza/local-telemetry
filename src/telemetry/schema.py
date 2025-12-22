@@ -12,6 +12,12 @@ SCHEMA VERSION 2 CHANGES:
 SCHEMA VERSION 3 CHANGES:
 - Added product_family column for business context (Aspose product family: slides, words, cells, etc.)
 - Added subdomain column for business context (site subdomain: products, docs, etc.)
+
+SCHEMA VERSION 4 CHANGES:
+- Added git_commit_hash column for tracking commit SHA
+- Added git_commit_source column for tracking how commit was created (manual, llm, ci)
+- Added git_commit_author column for commit author
+- Added git_commit_timestamp column for when commit was made
 """
 
 import sqlite3
@@ -21,21 +27,25 @@ from typing import Tuple
 # Schema version for migrations
 # v2: Added insight_id column for SEO Intelligence integration
 # v3: Added product_family and subdomain columns for business context tracking
-SCHEMA_VERSION = 3
+# v4: Added git commit tracking fields (hash, source, author, timestamp)
+# v5: Added website, website_section, item_name for API spec compliance
+# v6: Added event_id with UNIQUE constraint for idempotency
+SCHEMA_VERSION = 6
 
 # Table definitions
 TABLES = {
     "agent_runs": """
 CREATE TABLE IF NOT EXISTS agent_runs (
     run_id TEXT PRIMARY KEY,
-    schema_version INTEGER DEFAULT 3,
+    event_id TEXT NOT NULL UNIQUE,
+    schema_version INTEGER DEFAULT 6,
     agent_name TEXT NOT NULL,
     agent_owner TEXT,
     job_type TEXT,
     trigger_type TEXT CHECK(trigger_type IN ('cli', 'web', 'scheduler', 'mcp', 'manual')),
     start_time TEXT NOT NULL,
     end_time TEXT,
-    status TEXT CHECK(status IN ('running', 'success', 'failed', 'partial')),
+    status TEXT CHECK(status IN ('running', 'success', 'failed', 'partial', 'timeout', 'cancelled')),
     items_discovered INTEGER DEFAULT 0,
     items_succeeded INTEGER DEFAULT 0,
     items_failed INTEGER DEFAULT 0,
@@ -49,9 +59,16 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     platform TEXT,
     product_family TEXT,
     subdomain TEXT,
+    website TEXT,
+    website_section TEXT,
+    item_name TEXT,
     git_repo TEXT,
     git_branch TEXT,
     git_run_tag TEXT,
+    git_commit_hash TEXT,
+    git_commit_source TEXT CHECK(git_commit_source IN ('manual', 'llm', 'ci', NULL)),
+    git_commit_author TEXT,
+    git_commit_timestamp TEXT,
     host TEXT,
     api_posted INTEGER DEFAULT 0,
     api_posted_at TEXT,
@@ -96,11 +113,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 # Index definitions
 INDEXES = [
+    "CREATE INDEX IF NOT EXISTS idx_runs_event_id ON agent_runs(event_id)",  # v6: Idempotency lookups
     "CREATE INDEX IF NOT EXISTS idx_runs_agent ON agent_runs(agent_name)",
     "CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status)",
     "CREATE INDEX IF NOT EXISTS idx_runs_start ON agent_runs(start_time)",
     "CREATE INDEX IF NOT EXISTS idx_runs_api_posted ON agent_runs(api_posted)",
-    "CREATE INDEX IF NOT EXISTS idx_runs_insight ON agent_runs(insight_id)",  # New: For SEO Intelligence queries
+    "CREATE INDEX IF NOT EXISTS idx_runs_insight ON agent_runs(insight_id)",  # For SEO Intelligence queries
+    "CREATE INDEX IF NOT EXISTS idx_runs_commit ON agent_runs(git_commit_hash)",  # For commit-based lookups
+    "CREATE INDEX IF NOT EXISTS idx_runs_website ON agent_runs(website)",  # For website-based queries
+    "CREATE INDEX IF NOT EXISTS idx_runs_website_section ON agent_runs(website, website_section)",  # For section queries
     "CREATE INDEX IF NOT EXISTS idx_events_run ON run_events(run_id)",
     "CREATE INDEX IF NOT EXISTS idx_commits_run ON commits(run_id)",
 ]
@@ -127,10 +148,10 @@ def create_schema(db_path: str) -> Tuple[bool, list[str]]:
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
 
-        # Enable WAL mode for concurrent access
-        cursor.execute("PRAGMA journal_mode=WAL")
-        wal_mode = cursor.fetchone()[0]
-        messages.append(f"[OK] Set journal mode: {wal_mode}")
+        # Enable DELETE mode for Docker volume mount compatibility
+        cursor.execute("PRAGMA journal_mode=DELETE")
+        journal_mode = cursor.fetchone()[0]
+        messages.append(f"[OK] Set journal mode: {journal_mode}")
 
         # Create tables
         for table_name, table_sql in TABLES.items():
@@ -150,7 +171,7 @@ def create_schema(db_path: str) -> Tuple[bool, list[str]]:
             INSERT OR IGNORE INTO schema_migrations (version, description)
             VALUES (?, ?)
             """,
-            (SCHEMA_VERSION, "Schema v3: Added product_family and subdomain columns"),
+            (SCHEMA_VERSION, "Schema v6: Added event_id with UNIQUE constraint for idempotency"),
         )
         if cursor.rowcount > 0:
             messages.append(f"[OK] Recorded schema version: {SCHEMA_VERSION}")
@@ -240,11 +261,15 @@ def verify_schema(db_path: str) -> Tuple[bool, list[str]]:
         existing_indexes = {row[0] for row in cursor.fetchall()}
 
         expected_indexes = {
+            "idx_runs_event_id",  # v6: Idempotency lookups
             "idx_runs_agent",
             "idx_runs_status",
             "idx_runs_start",
             "idx_runs_api_posted",
-            "idx_runs_insight",  # New index
+            "idx_runs_insight",
+            "idx_runs_commit",  # For commit-based lookups
+            "idx_runs_website",  # For website-based queries
+            "idx_runs_website_section",  # For section queries
             "idx_events_run",
             "idx_commits_run",
         }
@@ -256,14 +281,14 @@ def verify_schema(db_path: str) -> Tuple[bool, list[str]]:
                 messages.append(f"[FAIL] Index missing: {index}")
                 all_ok = False
 
-        # Check WAL mode
+        # Check DELETE mode
         cursor.execute("PRAGMA journal_mode")
         journal_mode = cursor.fetchone()[0]
-        if journal_mode.lower() == "wal":
+        if journal_mode.lower() == "delete":
             messages.append(f"[OK] Journal mode: {journal_mode}")
         else:
             messages.append(
-                f"[FAIL] Journal mode is {journal_mode}, expected WAL"
+                f"[FAIL] Journal mode is {journal_mode}, expected DELETE"
             )
             all_ok = False
 
@@ -324,7 +349,7 @@ PRAGMA journal_mode=WAL;
         sql_content += f"""
 -- Record schema version
 INSERT OR IGNORE INTO schema_migrations (version, description)
-VALUES ({SCHEMA_VERSION}, 'Schema v3: Added product_family and subdomain columns');
+VALUES ({SCHEMA_VERSION}, 'Schema v6: Added event_id with UNIQUE constraint for idempotency');
 """
 
         with open(output_file, "w", encoding="utf-8") as f:
