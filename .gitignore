@@ -188,3 +188,6 @@ release/
 docs/_build/
 site/
 /.claude
+/docs/_archive
+/docs/_audit
+/raw
