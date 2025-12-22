@@ -355,6 +355,40 @@ class TestRunContext:
             assert record.items_succeeded == 5
             assert record.items_failed == 2
 
+    def test_run_context_set_metrics_warns_on_unknown_kwarg(self, caplog):
+        """Test that set_metrics logs warning for unknown kwargs (TEL-07-D)."""
+        import logging
+        caplog.set_level(logging.WARNING)
+
+        client = TelemetryClient()
+
+        with client.track_run("test_agent", "test_job") as ctx:
+            # Valid kwarg should work
+            ctx.set_metrics(items_discovered=10)
+            assert ctx._record.items_discovered == 10
+
+            # Invalid kwarg (typo) should warn
+            ctx.set_metrics(items_discoverd=20)  # Note: typo
+
+        # Check warning was logged
+        assert any("items_discoverd" in record.message for record in caplog.records)
+        assert any("ignoring unknown kwarg" in record.message for record in caplog.records)
+
+    def test_run_context_set_metrics_unknown_kwarg_does_not_crash(self):
+        """Test that unknown kwargs don't crash set_metrics (TEL-07-D)."""
+        client = TelemetryClient()
+
+        with client.track_run("test_agent", "test_job") as ctx:
+            # Should not crash with unknown kwargs
+            ctx.set_metrics(
+                items_discovered=10,
+                nonexistent_field="value",
+                another_typo=123,
+            )
+
+            # Valid field should still be set
+            assert ctx._record.items_discovered == 10
+
 
 class TestLogEvent:
     """Test log_event method."""
