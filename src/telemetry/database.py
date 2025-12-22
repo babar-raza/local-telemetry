@@ -22,13 +22,16 @@ class DatabaseWriter:
     Features:
     - Retry logic for SQLite lock contention (3 retries with exponential backoff)
     - Synchronous writes for run summaries (start/end)
-    - WAL mode for concurrent access
+    - DELETE mode for Docker volume mount compatibility
     - No writes to run_events table (NDJSON only per TEL-03 design)
 
     Concurrency Strategy:
     - Run summaries: 1 INSERT at start, 1 UPDATE at end (low frequency)
     - Events: Written to NDJSON only (avoids contention)
     - Retry on lock: 100ms, 200ms, 400ms delays
+
+    Note: DELETE mode is used instead of WAL because WAL requires shared memory files
+    (.shm) that don't work across Docker volume mounts on Windows hosts.
     """
 
     def __init__(self, database_path: Path, max_retries: int = 3):
@@ -78,14 +81,13 @@ class DatabaseWriter:
 
     def _get_connection(self) -> sqlite3.Connection:
         """
-        Get database connection with WAL mode and corruption prevention settings.
+        Get database connection with DELETE mode and corruption prevention settings.
 
         Creates the database directory if it doesn't exist before connecting.
         Configures SQLite pragmas to prevent corruption:
-        - WAL mode for concurrent access
+        - DELETE mode for Docker volume mount compatibility (WAL requires shared memory files)
         - busy_timeout to wait for locks instead of failing immediately
-        - synchronous=NORMAL for durability without excessive fsync
-        - wal_autocheckpoint for regular checkpointing
+        - synchronous=FULL for durability and corruption prevention
 
         Returns:
             sqlite3.Connection: Database connection
@@ -98,11 +100,29 @@ class DatabaseWriter:
 
         conn = sqlite3.connect(self.database_path)
 
-        # Corruption prevention settings
-        conn.execute("PRAGMA busy_timeout=5000")  # Wait 5s for locks
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute("PRAGMA synchronous=NORMAL")  # Durability without excessive fsync
-        conn.execute("PRAGMA wal_autocheckpoint=1000")  # Checkpoint every 1000 pages
+        # Corruption prevention settings (production-grade)
+        conn.execute("PRAGMA busy_timeout=30000")  # Wait 30s for locks (increased from 5s)
+        conn.execute("PRAGMA journal_mode=DELETE")  # DELETE mode for Docker compatibility (changed from WAL)
+        conn.execute("PRAGMA synchronous=FULL")  # CRITICAL: Prevent corruption on crashes
+
+        # Verify settings were applied correctly
+        cursor = conn.cursor()
+        actual_timeout = cursor.execute("PRAGMA busy_timeout").fetchone()[0]
+        actual_journal = cursor.execute("PRAGMA journal_mode").fetchone()[0]
+        actual_sync = cursor.execute("PRAGMA synchronous").fetchone()[0]
+
+        logger.info(
+            f"SQLite PRAGMA settings: busy_timeout={actual_timeout}ms, "
+            f"journal_mode={actual_journal}, synchronous={actual_sync}"
+        )
+
+        # Warn if critical settings don't match expected values
+        if actual_timeout != 30000:
+            logger.warning(f"busy_timeout is {actual_timeout}ms, expected 30000ms")
+        if actual_journal.lower() != "delete":
+            logger.warning(f"journal_mode is {actual_journal}, expected delete")
+        if actual_sync != 2:  # 2 = FULL
+            logger.warning(f"synchronous is {actual_sync}, expected 2 (FULL)")
 
         return conn
 
@@ -183,10 +203,12 @@ class DatabaseWriter:
                 items_discovered, items_succeeded, items_failed,
                 duration_ms, input_summary, output_summary, error_summary,
                 metrics_json, insight_id, product, platform, product_family, subdomain,
-                git_repo, git_branch, git_run_tag, host,
-                api_posted, api_posted_at, api_retry_count
+                website, website_section, item_name,
+                git_repo, git_branch, git_run_tag,
+                git_commit_hash, git_commit_source, git_commit_author, git_commit_timestamp,
+                host, api_posted, api_posted_at, api_retry_count
             ) VALUES (
-                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
             )
         """
 
@@ -213,9 +235,16 @@ class DatabaseWriter:
             record.platform,
             record.product_family,
             record.subdomain,
+            record.website,
+            record.website_section,
+            record.item_name,
             record.git_repo,
             record.git_branch,
             record.git_run_tag,
+            record.git_commit_hash,
+            record.git_commit_source,
+            record.git_commit_author,
+            record.git_commit_timestamp,
             record.host,
             record.api_posted,
             record.api_posted_at,
@@ -252,9 +281,16 @@ class DatabaseWriter:
                 platform = ?,
                 product_family = ?,
                 subdomain = ?,
+                website = ?,
+                website_section = ?,
+                item_name = ?,
                 git_repo = ?,
                 git_branch = ?,
                 git_run_tag = ?,
+                git_commit_hash = ?,
+                git_commit_source = ?,
+                git_commit_author = ?,
+                git_commit_timestamp = ?,
                 host = ?,
                 api_posted = ?,
                 api_posted_at = ?,
@@ -279,9 +315,16 @@ class DatabaseWriter:
             record.platform,
             record.product_family,
             record.subdomain,
+            record.website,
+            record.website_section,
+            record.item_name,
             record.git_repo,
             record.git_branch,
             record.git_run_tag,
+            record.git_commit_hash,
+            record.git_commit_source,
+            record.git_commit_author,
+            record.git_commit_timestamp,
             record.host,
             record.api_posted,
             record.api_posted_at,
@@ -399,6 +442,113 @@ class DatabaseWriter:
 
         except Exception:
             return []
+
+    def associate_commit(
+        self,
+        run_id: str,
+        commit_hash: str,
+        commit_source: str,
+        commit_author: Optional[str] = None,
+        commit_timestamp: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """
+        Associate a git commit with a completed telemetry run.
+
+        Use this method after a commit is made to link it back to the
+        translation/agent run that produced the changes.
+
+        Args:
+            run_id: The run ID to associate the commit with
+            commit_hash: Full 40-character git commit SHA
+            commit_source: How the commit was created ('manual', 'llm', 'ci')
+            commit_author: Optional git author string (e.g., "Name <email>")
+            commit_timestamp: Optional ISO8601 timestamp of when commit was made
+
+        Returns:
+            Tuple of (success: bool, message: str)
+
+        Example:
+            >>> writer.associate_commit(
+            ...     run_id="20251215T120000Z-hugo-translator-abc123",
+            ...     commit_hash="a1b2c3d4e5f6789012345678901234567890abcd",
+            ...     commit_source="llm",
+            ...     commit_author="Claude Code <noreply@anthropic.com>",
+            ...     commit_timestamp="2025-12-15T12:30:00+00:00"
+            ... )
+            (True, "[OK] Commit associated successfully")
+        """
+        import re
+
+        # Validate commit_source
+        valid_sources = ('manual', 'llm', 'ci')
+        if commit_source not in valid_sources:
+            return False, f"[FAIL] Invalid commit_source '{commit_source}'. Must be one of: {valid_sources}"
+
+        # Validate commit_hash format (40-char hex, optional for flexibility)
+        if commit_hash and not re.match(r'^[a-fA-F0-9]{7,40}$', commit_hash):
+            return False, f"[FAIL] Invalid commit_hash format. Expected 7-40 hex characters, got: {commit_hash}"
+
+        # Check run exists
+        existing = self.get_run(run_id)
+        if not existing:
+            return False, f"[FAIL] Run not found: {run_id}"
+
+        sql = """
+            UPDATE agent_runs SET
+                git_commit_hash = ?,
+                git_commit_source = ?,
+                git_commit_author = ?,
+                git_commit_timestamp = ?,
+                updated_at = datetime('now')
+            WHERE run_id = ?
+        """
+
+        params = (commit_hash, commit_source, commit_author, commit_timestamp, run_id)
+        success, _, message = self._execute_with_retry(sql, params)
+
+        if success:
+            return True, "[OK] Commit associated successfully"
+        return success, message
+
+    def checkpoint_wal(self, mode: str = "PASSIVE") -> tuple[bool, str]:
+        """
+        Manually checkpoint the WAL (Write-Ahead Log) file.
+
+        This forces SQLite to move WAL data into the main database file,
+        preventing WAL bloat and reducing corruption risk.
+
+        Args:
+            mode: Checkpoint mode - PASSIVE, FULL, RESTART, or TRUNCATE
+                  PASSIVE: Checkpoint as much as possible without blocking
+                  FULL: Wait for readers, checkpoint everything
+                  RESTART: Like FULL, restart WAL
+                  TRUNCATE: Like RESTART, truncate WAL to 0 bytes (recommended)
+
+        Returns:
+            Tuple of (success: bool, message: str)
+
+        Usage:
+            Call after large batch operations or before shutdown:
+            writer.checkpoint_wal(mode="TRUNCATE")
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(f"PRAGMA wal_checkpoint({mode})")
+            result = cursor.fetchone()
+
+            conn.close()
+
+            # result is (busy, log, checkpointed)
+            # 0 = successful, 1 = blocked
+            if result and result[0] == 0:
+                return True, f"[OK] WAL checkpoint ({mode}) successful"
+            else:
+                return False, f"[WARN] WAL checkpoint blocked: {result}"
+
+        except Exception as e:
+            return False, f"[FAIL] WAL checkpoint error: {e}"
 
     def get_run_stats(self) -> Dict[str, Any]:
         """
