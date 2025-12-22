@@ -1,0 +1,84 @@
+version: '3.8'
+
+services:
+  local-telemetry-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: local-telemetry-api
+    image: local-telemetry-api:2.0.0
+
+    # Port mapping
+    ports:
+      - "8765:8765"
+
+    # Data persistence using Docker volume
+    volumes:
+      - telemetry-data:/data
+      # Optional: Mount existing database for migration
+      # - D:/agent-metrics/db:/data-migration:ro
+
+    # Environment configuration
+    environment:
+      # Database settings
+      - TELEMETRY_DB_PATH=/data/telemetry.sqlite
+      - TELEMETRY_LOCK_FILE=/data/telemetry.lock
+
+      # PRAGMA settings (corruption prevention)
+      - TELEMETRY_DB_JOURNAL_MODE=DELETE
+      - TELEMETRY_DB_SYNCHRONOUS=FULL
+
+      # API server settings
+      - TELEMETRY_API_HOST=0.0.0.0
+      - TELEMETRY_API_PORT=8765
+      - TELEMETRY_API_WORKERS=1  # CRITICAL: Must be 1
+
+      # Logging
+      - TELEMETRY_LOG_LEVEL=INFO
+
+    # Restart policy - always restart (including when Docker starts)
+    restart: always
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    # Resource limits (optional, adjust as needed)
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+    # Network
+    networks:
+      - telemetry-network
+
+# Docker-managed volume for database
+volumes:
+  telemetry-data:
+    driver: local
+    # Optional: Use bind mount to Windows directory
+    # driver_opts:
+    #   type: none
+    #   device: D:/agent-metrics/docker-data
+    #   o: bind
+
+# Network for telemetry services
+networks:
+  telemetry-network:
+    driver: bridge

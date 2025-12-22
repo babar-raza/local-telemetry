@@ -1,0 +1,95 @@
+# Git files
+.git
+.gitignore
+.gitattributes
+
+# Python cache
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Documentation (not needed in container)
+docs/
+*.md
+!README.md
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Data directories (should use volumes)
+data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.lock
+*.jsonl
+*.jsonl.active
+*.jsonl.ready
+*.jsonl.synced
+
+# Backup files
+*.backup
+*.bak
+raw/
+migrations/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Scripts not needed in container
+scripts/setup_*.py
+scripts/setup_*.ps1
+scripts/start_*.sh
+scripts/start_*.ps1
+scripts/start_*.bat
+scripts/sync_*.py
+scripts/generate_*.py
+scripts/analyze_*.py
+scripts/check_*.py
+scripts/diagnose_*.py
+scripts/recover_*.py
+scripts/associate_*.py
+
+# Keep only migration script
+!scripts/migrate_v5_to_v6.py
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Docker files (no need to copy into image)
+Dockerfile
+docker-compose.yml
+.dockerignore
