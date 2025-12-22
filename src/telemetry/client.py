@@ -5,9 +5,12 @@ TelemetryClient provides the public API for agent telemetry instrumentation.
 """
 
 import json
+import logging
 import platform
 from contextlib import contextmanager
 from typing import Optional, Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from .config import TelemetryConfig
 from .models import (
@@ -19,8 +22,11 @@ from .models import (
     calculate_duration_ms,
 )
 from .local import NDJSONWriter
-from .database import DatabaseWriter
-from .api import APIClient
+from .database import DatabaseWriter  # Kept for backward compatibility (reads only)
+from .api import APIClient  # Google Sheets API (external)
+from .http_client import HTTPAPIClient, APIUnavailableError  # Telemetry HTTP API
+from .buffer import BufferFile  # Local buffer for failover
+from pathlib import Path
 
 
 class RunContext:
@@ -76,6 +82,9 @@ class RunContext:
             - insight_id (links action runs to originating insights)
             - product
             - platform
+            - website (API spec: root domain e.g., "aspose.com")
+            - website_section (API spec: subdomain e.g., "products", "docs")
+            - item_name (API spec: specific page/entity e.g., "/slides/net/")
             - git_repo
             - git_branch
             - git_run_tag
@@ -84,6 +93,8 @@ class RunContext:
         for key, value in kwargs.items():
             if hasattr(self._record, key):
                 setattr(self._record, key, value)
+            else:
+                logger.warning(f"set_metrics() ignoring unknown kwarg: {key}")
 
 
 class TelemetryClient:
@@ -94,9 +105,16 @@ class TelemetryClient:
     1. Explicit start_run() / end_run()
     2. Context manager track_run()
 
+    Architecture (MIG-008):
+    - Primary: HTTP API POST (single-writer, zero corruption)
+    - Failover: Local buffer files (guaranteed delivery)
+    - Backup: NDJSON files (local resilience)
+    - External: Google Sheets API (fire-and-forget)
+
     Features:
-    - Dual-write: NDJSON (local resilience) + SQLite (structured queries)
-    - API posting: Fire-and-forget to Google Sheets
+    - Zero corruption guarantee (single-writer via HTTP API)
+    - Guaranteed delivery (buffer + sync worker)
+    - At-least-once semantics (idempotent API)
     - Error handling: Never crashes the agent
     """
 
@@ -117,17 +135,90 @@ class TelemetryClient:
             for error in errors:
                 print(f"  - {error}")
 
-        # Initialize writers
+        # Initialize HTTP API client (primary write destination)
+        api_url = self.config.api_url or "http://localhost:8765"
+        self.http_api = HTTPAPIClient(api_url=api_url)
+        logger.info(f"HTTP API client initialized: {api_url}")
+
+        # Initialize local buffer (failover when API unavailable)
+        buffer_dir = getattr(self.config, 'buffer_dir', None) or Path("./telemetry_buffer")
+        self.buffer = BufferFile(buffer_dir=str(buffer_dir))
+        logger.info(f"Buffer initialized: {buffer_dir}")
+
+        # Initialize NDJSON writer (backup/audit trail)
         self.ndjson_writer = NDJSONWriter(self.config.ndjson_dir)
-        self.database_writer = DatabaseWriter(self.config.database_path)
+
+        # Initialize Google Sheets API client (external export)
         self.api_client = APIClient(
             api_url=self.config.api_url,
             api_token=self.config.api_token,
             api_enabled=self.config.api_enabled,
         )
 
+        # Keep database_writer for backward compatibility (reads only)
+        # TODO: Remove after migration complete, replace with HTTP API reads
+        try:
+            self.database_writer = DatabaseWriter(self.config.database_path)
+            logger.debug("Database writer initialized (read-only)")
+        except Exception as e:
+            logger.warning(f"Database writer initialization failed: {e}")
+            self.database_writer = None
+
         # Run registry (for tracking active runs)
         self._active_runs: Dict[str, RunRecord] = {}
+
+
+    def _write_run_to_api(self, record: RunRecord):
+        """
+        Write run to HTTP API with buffer failover (MIG-008).
+
+        Strategy:
+        1. Try POST to HTTP API
+        2. If API unavailable, write to local buffer
+        3. Buffer sync worker will retry later
+
+        Args:
+            record: RunRecord to write
+        """
+        # Convert record to dict (API format)
+        event_dict = record.to_dict()
+
+        # Ensure event_id exists (required for idempotency)
+        if 'event_id' not in event_dict or not event_dict['event_id']:
+            import uuid
+            event_dict['event_id'] = str(uuid.uuid4())
+
+        # Ensure timestamps exist (required by API)
+        current_timestamp = get_iso8601_timestamp()
+        if not event_dict.get('created_at'):
+            event_dict['created_at'] = current_timestamp
+        if not event_dict.get('updated_at'):
+            event_dict['updated_at'] = current_timestamp
+
+        try:
+            # Primary: POST to HTTP API
+            result = self.http_api.post_event(event_dict)
+            logger.debug(
+                f"Event written to API: {result['status']} "
+                f"(event_id={event_dict['event_id']})"
+            )
+
+        except APIUnavailableError as e:
+            # Failover: Write to local buffer
+            logger.warning(f"API unavailable, buffering event: {e}")
+            self.buffer.append(event_dict)
+            logger.info(f"Event buffered locally: {event_dict['event_id']}")
+
+        except Exception as e:
+            # Unexpected error - still buffer the event
+            logger.error(f"Unexpected API error, buffering event: {e}")
+            self.buffer.append(event_dict)
+
+        # Optional: Keep NDJSON backup (for audit trail)
+        try:
+            self.ndjson_writer.append(event_dict)
+        except Exception as e:
+            logger.warning(f"NDJSON write failed: {e}")
 
     def start_run(
         self,
@@ -172,13 +263,8 @@ class TelemetryClient:
             # Store in registry
             self._active_runs[run_id] = record
 
-            # Write to NDJSON (local resilience)
-            self.ndjson_writer.append(record.to_dict())
-
-            # Write to SQLite (structured queries)
-            success, message = self.database_writer.insert_run(record)
-            if not success:
-                print(f"[WARN] Database insert failed: {message}")
+            # Write to HTTP API (with buffer failover)
+            self._write_run_to_api(record)
 
             return run_id
 
@@ -231,32 +317,23 @@ class TelemetryClient:
                 if hasattr(record, key):
                     setattr(record, key, value)
 
-            # Write to NDJSON
-            self.ndjson_writer.append(record.to_dict())
+            # Write to HTTP API (with buffer failover)
+            self._write_run_to_api(record)
 
-            # Update in SQLite
-            success, message = self.database_writer.update_run(record)
-            if not success:
-                print(f"[WARN] Database update failed: {message}")
-
-            # Post to API (fire-and-forget)
+            # Post to Google Sheets API (fire-and-forget, external export)
             try:
                 payload = APIPayload.from_run_record(record)
                 success, message = self.api_client.post_run_sync(payload)
 
-                if success:
-                    # Mark as posted in database
-                    posted_at = get_iso8601_timestamp()
-                    self.database_writer.mark_api_posted(run_id, posted_at)
-                else:
-                    # Increment retry count
-                    self.database_writer.increment_api_retry_count(run_id)
+                if not success:
+                    logger.debug(f"Google Sheets API post failed: {message}")
 
             except Exception as e:
-                print(f"[WARN] API post failed: {e}")
+                logger.debug(f"Google Sheets API post failed: {e}")
 
             # Remove from registry
-            del self._active_runs[run_id]
+            if run_id in self._active_runs:
+                del self._active_runs[run_id]
 
         except Exception as e:
             # Never crash the agent
@@ -366,6 +443,82 @@ class TelemetryClient:
             print(f"Total runs: {stats['total_runs']}")
         """
         try:
-            return self.database_writer.get_run_stats()
+            # Try HTTP API first
+            metrics = self.http_api.get_metrics()
+            if metrics:
+                return {
+                    "total_runs": metrics.get('total_runs', 0),
+                    "agents": metrics.get('agents', {}),
+                    "recent_24h": metrics.get('recent_24h', 0),
+                }
         except Exception as e:
-            return {"error": str(e)}
+            logger.debug(f"HTTP API get_metrics failed: {e}")
+
+        # Fallback to database (if available)
+        if self.database_writer:
+            try:
+                return self.database_writer.get_run_stats()
+            except Exception as e:
+                logger.error(f"Database get_stats failed: {e}")
+
+        return {"error": "Statistics unavailable"}
+
+    def associate_commit(
+        self,
+        run_id: str,
+        commit_hash: str,
+        commit_source: str,
+        commit_author: Optional[str] = None,
+        commit_timestamp: Optional[str] = None,
+    ) -> tuple[bool, str]:
+        """
+        Associate a git commit with a completed telemetry run.
+
+        Use this method after a commit is made to link it back to the
+        agent run that produced the changes. This enables tracking which
+        commits came from which agent runs.
+
+        Args:
+            run_id: The run ID to associate the commit with
+            commit_hash: Git commit SHA (7-40 hex characters)
+            commit_source: How the commit was created ('manual', 'llm', 'ci')
+            commit_author: Optional git author string (e.g., "Name <email>")
+            commit_timestamp: Optional ISO8601 timestamp of when commit was made
+
+        Returns:
+            Tuple of (success: bool, message: str)
+
+        Example:
+            # After completing a run and making a commit:
+            run_id = client.start_run("hugo-translator", "translate")
+            # ... do work, make changes ...
+            client.end_run(run_id, status="success")
+
+            # After git commit:
+            import subprocess
+            result = subprocess.run(['git', 'rev-parse', 'HEAD'], capture_output=True, text=True)
+            commit_hash = result.stdout.strip()
+
+            success, msg = client.associate_commit(
+                run_id=run_id,
+                commit_hash=commit_hash,
+                commit_source="llm",
+                commit_author="Claude Code <noreply@anthropic.com>"
+            )
+        """
+        # TODO MIG-008: Add HTTP API endpoint for commit association
+        # For now, use database_writer if available
+        if self.database_writer:
+            try:
+                return self.database_writer.associate_commit(
+                    run_id=run_id,
+                    commit_hash=commit_hash,
+                    commit_source=commit_source,
+                    commit_author=commit_author,
+                    commit_timestamp=commit_timestamp,
+                )
+            except Exception as e:
+                # Never crash the agent
+                return False, f"[ERROR] associate_commit failed: {e}"
+        else:
+            return False, "[ERROR] Commit association not available (database unavailable)"
