@@ -226,7 +226,12 @@ def check_database():
             result = cursor.fetchone()
             if result:
                 version = result[0]
-                all_passed &= print_check(f"Schema version: {version}", True)
+                version_ok = version >= 4
+                all_passed &= print_check(
+                    f"Schema version: {version}",
+                    version_ok,
+                    "Run: python scripts/migrate_v3_to_v4.py" if not version_ok else None
+                )
             else:
                 all_passed &= print_check(
                     "Schema version",
@@ -234,12 +239,91 @@ def check_database():
                     "No version found in schema_migrations table"
                 )
 
+        # Check v4 columns exist
+        cursor.execute("PRAGMA table_info(agent_runs)")
+        columns = {row[1] for row in cursor.fetchall()}
+        v4_columns = ["git_commit_hash", "git_commit_source", "git_commit_author", "git_commit_timestamp"]
+        for col in v4_columns:
+            col_exists = col in columns
+            all_passed &= print_check(
+                f"Column '{col}' exists",
+                col_exists,
+                "Run: python scripts/migrate_v3_to_v4.py" if not col_exists else None
+            )
+
+        # Check v4 index exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_runs_commit'")
+        idx_exists = cursor.fetchone() is not None
+        all_passed &= print_check(
+            "Index 'idx_runs_commit' exists",
+            idx_exists,
+            "Run: python scripts/migrate_v3_to_v4.py" if not idx_exists else None
+        )
+
         # Test read
         cursor.execute("SELECT COUNT(*) FROM agent_runs;")
         count = cursor.fetchone()[0]
         all_passed &= print_check("Can read from database", True)
 
-        conn.close()
+        # Check PRAGMA settings (corruption prevention)
+        # These settings should match database.py:_get_connection()
+        try:
+            # Import DatabaseWriter to get a connection with proper PRAGMA settings
+            from telemetry.database import DatabaseWriter
+
+            # Close the raw connection and get one with proper settings
+            conn.close()
+
+            writer = DatabaseWriter(db_path)
+            pragma_conn = writer._get_connection()
+            pragma_cursor = pragma_conn.cursor()
+
+            # Check each PRAGMA setting
+            busy_timeout = pragma_cursor.execute("PRAGMA busy_timeout").fetchone()[0]
+            busy_ok = busy_timeout == 30000
+            all_passed &= print_check(
+                f"PRAGMA busy_timeout: {busy_timeout}ms",
+                busy_ok,
+                "Expected 30000ms (see database.py:_get_connection)"
+            )
+
+            journal_mode = pragma_cursor.execute("PRAGMA journal_mode").fetchone()[0]
+            journal_ok = journal_mode.lower() == "wal"
+            all_passed &= print_check(
+                f"PRAGMA journal_mode: {journal_mode}",
+                journal_ok,
+                "Expected WAL (see database.py:_get_connection)"
+            )
+
+            synchronous = pragma_cursor.execute("PRAGMA synchronous").fetchone()[0]
+            sync_ok = synchronous == 2  # 2 = FULL
+            all_passed &= print_check(
+                f"PRAGMA synchronous: {synchronous} (FULL)",
+                sync_ok,
+                "Expected 2 (FULL) for corruption prevention"
+            )
+
+            wal_checkpoint = pragma_cursor.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
+            checkpoint_ok = wal_checkpoint == 100
+            all_passed &= print_check(
+                f"PRAGMA wal_autocheckpoint: {wal_checkpoint}",
+                checkpoint_ok,
+                "Expected 100 pages to prevent WAL bloat"
+            )
+
+            pragma_conn.close()
+
+            # Provide a summary if any PRAGMA setting is wrong
+            if not (busy_ok and journal_ok and sync_ok and checkpoint_ok):
+                print("         [INFO] Run: python scripts/diagnose_pragma_settings.py")
+                print("         [INFO] PRAGMA settings prevent database corruption")
+
+        except Exception as e:
+            all_passed &= print_check(
+                "PRAGMA settings check",
+                False,
+                f"Error checking PRAGMA: {e}"
+            )
 
     except sqlite3.Error as e:
         all_passed &= print_check(
@@ -297,10 +381,13 @@ def check_tests():
 
     all_passed = True
 
-    # Check if test runner exists
+    # Check if test runner exists (either in root or scripts/)
     test_runner = Path("run_tests.py")
+    test_runner_scripts = Path("scripts/run_tests.py")
     if test_runner.exists():
         all_passed &= print_check("Test runner exists (run_tests.py)", True)
+    elif test_runner_scripts.exists():
+        all_passed &= print_check("Test runner exists (scripts/run_tests.py)", True)
     else:
         all_passed &= print_check(
             "Test runner exists",
