@@ -260,3 +260,116 @@ class TelemetryConfig:
             f"agent_owner={self.agent_owner}, "
             f"test_mode={self.test_mode})"
         )
+
+
+class TelemetryAPIConfig:
+    """
+    Centralized configuration management for Telemetry API server.
+    All values loaded from environment variables with sensible defaults.
+    """
+
+    # API Configuration
+    API_URL: str = os.getenv("TELEMETRY_API_URL", "http://localhost:8765")
+    API_PORT: int = int(os.getenv("TELEMETRY_API_PORT", "8765"))
+    API_HOST: str = os.getenv("TELEMETRY_API_HOST", "0.0.0.0")
+    API_WORKERS: int = int(os.getenv("TELEMETRY_API_WORKERS", "1"))
+
+    # Database Configuration
+    DB_PATH: str = os.getenv("TELEMETRY_DB_PATH", "./data/telemetry.sqlite")
+    DB_JOURNAL_MODE: str = os.getenv("TELEMETRY_DB_JOURNAL_MODE", "DELETE")
+    DB_SYNCHRONOUS: str = os.getenv("TELEMETRY_DB_SYNCHRONOUS", "FULL")
+
+    # PostgreSQL (optional)
+    DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
+
+    # Buffer Configuration
+    BUFFER_DIR: str = os.getenv("TELEMETRY_BUFFER_DIR", "./telemetry_buffer")
+    BUFFER_MAX_SIZE_MB: int = int(os.getenv("TELEMETRY_BUFFER_MAX_SIZE_MB", "10"))
+    BUFFER_MAX_AGE_HOURS: int = int(os.getenv("TELEMETRY_BUFFER_MAX_AGE_HOURS", "24"))
+
+    # Sync Worker
+    SYNC_INTERVAL_SECONDS: int = int(os.getenv("TELEMETRY_SYNC_INTERVAL_SECONDS", "60"))
+    SYNC_BATCH_SIZE: int = int(os.getenv("TELEMETRY_SYNC_BATCH_SIZE", "100"))
+
+    # Security
+    LOCK_FILE: str = os.getenv("TELEMETRY_LOCK_FILE", "./telemetry_api.lock")
+
+    # Logging
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    @classmethod
+    def validate(cls):
+        """Validate configuration before startup."""
+        errors = []
+        warnings = []
+
+        # API workers MUST be 1
+        if cls.API_WORKERS != 1:
+            errors.append(
+                f"CRITICAL: TELEMETRY_API_WORKERS must be 1 (single writer), "
+                f"got {cls.API_WORKERS}"
+            )
+
+        # Journal mode MUST be DELETE
+        if cls.DB_JOURNAL_MODE.upper() != "DELETE":
+            warnings.append(
+                f"WARNING: TELEMETRY_DB_JOURNAL_MODE should be DELETE for "
+                f"Docker/Windows compatibility, got {cls.DB_JOURNAL_MODE}"
+            )
+
+        # Synchronous MUST be FULL
+        if cls.DB_SYNCHRONOUS.upper() != "FULL":
+            errors.append(
+                f"CRITICAL: TELEMETRY_DB_SYNCHRONOUS must be FULL for corruption "
+                f"prevention, got {cls.DB_SYNCHRONOUS}"
+            )
+
+        # DB path directory must exist or be creatable
+        db_dir = Path(cls.DB_PATH).parent
+        if not db_dir.exists():
+            try:
+                db_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created DB directory: {db_dir}")
+            except Exception as e:
+                errors.append(f"Cannot create DB directory {db_dir}: {e}")
+
+        # Buffer directory must exist or be creatable
+        buffer_dir = Path(cls.BUFFER_DIR)
+        if not buffer_dir.exists():
+            try:
+                buffer_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Created buffer directory: {buffer_dir}")
+            except Exception as e:
+                errors.append(f"Cannot create buffer directory {buffer_dir}: {e}")
+
+        # Print warnings
+        for warning in warnings:
+            logger.warning(warning)
+
+        if errors:
+            print("=" * 70)
+            print("[CRITICAL] CONFIGURATION ERRORS")
+            print("=" * 70)
+            for error in errors:
+                print(f"  - {error}")
+            print("=" * 70)
+            raise ValueError("Configuration validation failed. See errors above.")
+
+        logger.info("[OK] Configuration validated successfully")
+
+    @classmethod
+    def print_config(cls):
+        """Print current configuration (for debugging)."""
+        print("=" * 70)
+        print("TELEMETRY API CONFIGURATION")
+        print("=" * 70)
+        print(f"API URL:         {cls.API_URL}")
+        print(f"API Port:        {cls.API_PORT}")
+        print(f"API Workers:     {cls.API_WORKERS} (MUST BE 1)")
+        print(f"DB Path:         {cls.DB_PATH}")
+        print(f"DB Journal Mode: {cls.DB_JOURNAL_MODE} (MUST BE DELETE)")
+        print(f"DB Synchronous:  {cls.DB_SYNCHRONOUS} (MUST BE FULL)")
+        print(f"Buffer Dir:      {cls.BUFFER_DIR}")
+        print(f"Lock File:       {cls.LOCK_FILE}")
+        print(f"Log Level:       {cls.LOG_LEVEL}")
+        print("=" * 70)
