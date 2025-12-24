@@ -261,6 +261,90 @@ Verify these are applied: `python scripts/diagnose_pragma_settings.py`
 
 ---
 
+## Query Performance Optimization (v2.1.0+)
+
+### Problem: Slow GET /api/v1/runs queries
+
+**Symptoms:**
+- Query takes >500ms to return results
+- Filtering by multiple parameters is slow
+- `ORDER BY created_at DESC` is slow
+
+**Diagnosis:**
+
+Check if performance indexes are installed:
+
+```bash
+# Via Docker
+docker compose exec telemetry-api sqlite3 /data/telemetry.sqlite "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_runs_%' ORDER BY name;"
+
+# Expected output should include:
+# idx_runs_agent
+# idx_runs_agent_created         -- v2.1.0
+# idx_runs_agent_status_created  -- v2.1.0
+# idx_runs_created_desc          -- v2.1.0
+# idx_runs_event_id
+# idx_runs_status
+# idx_runs_start
+```
+
+**Solution:**
+
+If v2.1.0 indexes are missing, apply them:
+
+```bash
+# Migration 003: created_at index
+docker compose exec telemetry-api sh -c "echo 'CREATE INDEX IF NOT EXISTS idx_runs_created_desc ON agent_runs(created_at DESC);' | sqlite3 /data/telemetry.sqlite"
+
+# Migration 004: composite indexes
+docker compose exec telemetry-api sh -c "echo 'CREATE INDEX IF NOT EXISTS idx_runs_agent_status_created ON agent_runs(agent_name, status, created_at DESC);' | sqlite3 /data/telemetry.sqlite"
+
+docker compose exec telemetry-api sh -c "echo 'CREATE INDEX IF NOT EXISTS idx_runs_agent_created ON agent_runs(agent_name, created_at DESC);' | sqlite3 /data/telemetry.sqlite"
+
+# Verify
+docker compose exec telemetry-api sqlite3 /data/telemetry.sqlite "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='agent_runs';"
+# Should return 13
+```
+
+**Performance Improvements:**
+
+With v2.1.0 indexes installed:
+- `ORDER BY created_at DESC`: 55% faster (0.9ms → 0.4ms)
+- Stale run detection (agent + status + time): 83% faster (2.4ms → 0.4ms)
+- Agent time-range queries: 76% faster (1.7ms → 0.4ms)
+
+See [DEPLOYMENT_GUIDE.md - Database Performance](DEPLOYMENT_GUIDE.md#database-performance-and-optimization) for complete benchmarks.
+
+### Problem: Index not being used by query planner
+
+**Diagnosis:**
+
+Check query execution plan:
+
+```bash
+docker compose exec telemetry-api sqlite3 /data/telemetry.sqlite "EXPLAIN QUERY PLAN SELECT * FROM agent_runs WHERE agent_name='hugo-translator' ORDER BY created_at DESC LIMIT 100;"
+
+# Should show: SEARCH agent_runs USING INDEX idx_runs_agent_created
+```
+
+**Common Issues:**
+
+1. **Index not analyzed** - Run ANALYZE to update statistics:
+   ```bash
+   docker compose exec telemetry-api sqlite3 /data/telemetry.sqlite "ANALYZE;"
+   ```
+
+2. **Query uses non-indexed columns** - Ensure query matches index structure:
+   - ✅ `WHERE agent_name='x' ORDER BY created_at DESC` → Uses `idx_runs_agent_created`
+   - ❌ `WHERE job_type='x' ORDER BY created_at DESC` → Full table scan (no index)
+
+3. **Index fragmented** - Rebuild indexes:
+   ```bash
+   docker compose exec telemetry-api sqlite3 /data/telemetry.sqlite "REINDEX;"
+   ```
+
+---
+
 ## Performance Issues
 
 ### Problem: Database writes are slow

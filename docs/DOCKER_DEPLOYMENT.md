@@ -85,12 +85,28 @@ curl http://localhost:8765/health
 ```json
 {
   "status": "ok",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "db_path": "/data/telemetry.sqlite",
   "journal_mode": "DELETE",
   "synchronous": "FULL"
 }
 ```
+
+### Step 5: Test New API Endpoints (v2.1.0+)
+
+**Query runs:**
+```bash
+curl "http://localhost:8765/api/v1/runs?limit=5"
+```
+
+**Update run:**
+```bash
+curl -X PATCH http://localhost:8765/api/v1/runs/{event_id} \
+  -H "Content-Type: application/json" \
+  -d '{"status": "cancelled"}'
+```
+
+See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md#api-reference-v210) for complete API reference.
 
 **🎉 You're done! The service is now running continuously.**
 
@@ -281,6 +297,33 @@ docker compose cp ./backup_20251220.sqlite telemetry-api:/data/telemetry.sqlite
 # Start service
 docker compose start
 ```
+
+### Upgrading to v2.1.0 - Performance Indexes
+
+If you're upgrading from v2.0.0 to v2.1.0, you need to add the new performance indexes to your existing database:
+
+```bash
+# Start the service first
+docker compose up -d
+
+# Apply the indexes via SQL commands
+docker compose exec telemetry-api sh -c "echo 'CREATE INDEX IF NOT EXISTS idx_runs_created_desc ON agent_runs(created_at DESC);' | sqlite3 /data/telemetry.sqlite"
+
+docker compose exec telemetry-api sh -c "echo 'CREATE INDEX IF NOT EXISTS idx_runs_agent_status_created ON agent_runs(agent_name, status, created_at DESC);' | sqlite3 /data/telemetry.sqlite"
+
+docker compose exec telemetry-api sh -c "echo 'CREATE INDEX IF NOT EXISTS idx_runs_agent_created ON agent_runs(agent_name, created_at DESC);' | sqlite3 /data/telemetry.sqlite"
+
+# Verify indexes were created
+docker compose exec telemetry-api sqlite3 /data/telemetry.sqlite "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND tbl_name='agent_runs';"
+# Should return 13 (includes all v2.0.0 and v2.1.0 indexes)
+```
+
+**Why these indexes matter:**
+- `idx_runs_created_desc` — Optimizes `ORDER BY created_at DESC` queries (55% faster)
+- `idx_runs_agent_status_created` — Optimizes stale run detection queries (83% faster)
+- `idx_runs_agent_created` — Optimizes agent + time range analytics (76% faster)
+
+See [DEPLOYMENT_GUIDE.md - Database Performance](DEPLOYMENT_GUIDE.md#database-performance-and-optimization) for complete performance benchmarks.
 
 ### Migrating Existing Database to Docker
 

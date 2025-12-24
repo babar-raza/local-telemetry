@@ -117,6 +117,9 @@ INDEXES = [
     "CREATE INDEX IF NOT EXISTS idx_runs_agent ON agent_runs(agent_name)",
     "CREATE INDEX IF NOT EXISTS idx_runs_status ON agent_runs(status)",
     "CREATE INDEX IF NOT EXISTS idx_runs_start ON agent_runs(start_time)",
+    "CREATE INDEX IF NOT EXISTS idx_runs_created_desc ON agent_runs(created_at DESC)",  # v2.1.0: Query performance for ORDER BY created_at DESC
+    "CREATE INDEX IF NOT EXISTS idx_runs_agent_status_created ON agent_runs(agent_name, status, created_at DESC)",  # v2.1.0: Composite index for stale run detection
+    "CREATE INDEX IF NOT EXISTS idx_runs_agent_created ON agent_runs(agent_name, created_at DESC)",  # v2.1.0: Composite index for time-range queries
     "CREATE INDEX IF NOT EXISTS idx_runs_api_posted ON agent_runs(api_posted)",
     "CREATE INDEX IF NOT EXISTS idx_runs_insight ON agent_runs(insight_id)",  # For SEO Intelligence queries
     "CREATE INDEX IF NOT EXISTS idx_runs_commit ON agent_runs(git_commit_hash)",  # For commit-based lookups
@@ -332,8 +335,8 @@ def export_schema_sql(output_path: str) -> Tuple[bool, str]:
 -- Version: {SCHEMA_VERSION}
 -- Generated: Auto-generated from schema.py
 
--- Enable WAL mode for concurrent access
-PRAGMA journal_mode=WAL;
+-- Enable DELETE mode for Docker volume compatibility
+PRAGMA journal_mode=DELETE;
 
 -- Tables
 """

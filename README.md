@@ -160,6 +160,90 @@ sqlite3 db/telemetry.sqlite "SELECT agent_name, COUNT(*) as runs, SUM(CASE WHEN 
 └── backups/                       # Automated backups
 ```
 
+## HTTP API Service (v2.1.0+)
+
+The telemetry service includes a FastAPI-based HTTP server that provides single-writer access to the SQLite database, preventing corruption from concurrent writes.
+
+**Key Features:**
+- Single-writer pattern with file locking
+- Event idempotency via `event_id` UNIQUE constraint
+- Query and update endpoints for stale run cleanup
+- Health and metrics endpoints
+
+**Starting the Service:**
+
+```bash
+# Development
+python telemetry_service.py
+
+# Production (Docker)
+docker-compose up -d
+```
+
+**API Endpoints:**
+
+```bash
+# Create run
+POST /api/v1/runs
+
+# Batch create
+POST /api/v1/runs/batch
+
+# Query runs (v2.1.0+)
+GET /api/v1/runs?agent_name=hugo-translator&status=running&created_before=2025-12-24T12:00:00Z
+
+# Update run (v2.1.0+)
+PATCH /api/v1/runs/{event_id}
+
+# Health check
+GET /health
+
+# System metrics
+GET /metrics
+```
+
+**Use Case: Stale Run Cleanup**
+
+When agents crash or are forcefully terminated, telemetry records can get stuck in "running" state. The v2.1.0 query and update endpoints enable cleanup on startup:
+
+```python
+import requests
+from datetime import datetime, timedelta, timezone
+
+# Query for stale running records (older than 1 hour)
+stale_threshold = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+response = requests.get(
+    "http://localhost:8765/api/v1/runs",
+    params={
+        "agent_name": "hugo-translator",
+        "status": "running",
+        "created_before": stale_threshold
+    }
+)
+
+# Mark each stale run as cancelled
+for run in response.json():
+    requests.patch(
+        f"http://localhost:8765/api/v1/runs/{run['event_id']}",
+        json={
+            "status": "cancelled",
+            "end_time": datetime.now(timezone.utc).isoformat(),
+            "error_summary": f"Stale run cleaned up on startup (created at {run['created_at']})"
+        }
+    )
+```
+
+**Query Performance:**
+
+The v2.1.0 release includes optimized database indexes for fast query operations:
+- Queries on 400+ runs complete in <1ms
+- Stale run detection queries are 83% faster with composite indexes
+- All queries use `ORDER BY created_at DESC` for consistent results
+
+For performance benchmarks and optimization details, see [docs/DEPLOYMENT_GUIDE.md - Database Performance](docs/DEPLOYMENT_GUIDE.md#database-performance-and-optimization).
+
+See [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) for complete API reference and deployment instructions.
+
 ## Configuration
 
 All configuration via environment variables:

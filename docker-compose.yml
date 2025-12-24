@@ -64,9 +64,10 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    # Network
+    # Network - connect to both internal and external networks
     networks:
       - telemetry-network
+      - seo-intelligence-network  # Allow seo-intelligence containers to reach this API
 
 # Docker-managed volume for database
 volumes:
@@ -82,3 +83,7 @@ volumes:
 networks:
   telemetry-network:
     driver: bridge
+  # External network from seo-intelligence project
+  seo-intelligence-network:
+    external: true
+    name: seo-intelligence_gsc_network

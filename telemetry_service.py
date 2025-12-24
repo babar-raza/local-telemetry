@@ -15,6 +15,8 @@ Architecture:
 Endpoints:
 - POST /api/v1/runs - Create single telemetry run
 - POST /api/v1/runs/batch - Create multiple runs (with deduplication)
+- GET /api/v1/runs - Query runs with filtering (v2.1.0+)
+- PATCH /api/v1/runs/{event_id} - Update run fields (v2.1.0+)
 - GET /health - Health check
 - GET /metrics - System metrics
 
@@ -38,9 +40,9 @@ from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
 
 try:
-    from fastapi import FastAPI, HTTPException, status
+    from fastapi import FastAPI, HTTPException, status, Query
     from fastapi.responses import JSONResponse
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, field_validator
     import uvicorn
     HAS_FASTAPI = True
 except ImportError:
@@ -53,6 +55,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from telemetry.config import TelemetryAPIConfig
 from telemetry.single_writer_guard import SingleWriterGuard
+from telemetry.logger import log_query, log_update, log_error, track_duration
 
 # Configure logging
 logging.basicConfig(
@@ -65,7 +68,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="Telemetry API",
     description="Single-writer telemetry collection service",
-    version="2.0.0"
+    version="2.1.0"
 )
 
 # Global lock guard
@@ -107,7 +110,13 @@ class TelemetryRun(BaseModel):
     items_skipped: int = 0
 
     # Performance
-    duration_ms: int = 0
+    duration_ms: Optional[int] = 0  # Accepts null from clients, converts to 0
+
+    @field_validator('duration_ms', mode='before')
+    @classmethod
+    def convert_null_duration(cls, v):
+        """Convert null/None to 0 for running jobs."""
+        return 0 if v is None else v
 
     # Input/Output
     input_summary: Optional[str] = None
@@ -150,6 +159,37 @@ class BatchResponse(BaseModel):
     duplicates: int
     errors: List[str]
     total: int
+
+
+class RunUpdate(BaseModel):
+    """Pydantic model for partial run updates."""
+    status: Optional[str] = None
+    end_time: Optional[str] = None
+    duration_ms: Optional[int] = None
+    error_summary: Optional[str] = None
+    error_details: Optional[str] = None
+    output_summary: Optional[str] = None
+    items_succeeded: Optional[int] = None
+    items_failed: Optional[int] = None
+    items_skipped: Optional[int] = None
+    metrics_json: Optional[Dict[str, Any]] = None
+    context_json: Optional[Dict[str, Any]] = None
+
+    @field_validator('status')
+    @classmethod
+    def validate_status(cls, v):
+        if v is not None:
+            allowed = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
+            if v not in allowed:
+                raise ValueError(f"Status must be one of: {allowed}")
+        return v
+
+    @field_validator('duration_ms', 'items_succeeded', 'items_failed', 'items_skipped')
+    @classmethod
+    def validate_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Value must be non-negative")
+        return v
 
 
 # Database context manager
@@ -261,7 +301,7 @@ async def health_check():
     """
     return {
         "status": "ok",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "db_path": str(TelemetryAPIConfig.DB_PATH),
         "journal_mode": TelemetryAPIConfig.DB_JOURNAL_MODE,
         "synchronous": TelemetryAPIConfig.DB_SYNCHRONOUS
@@ -404,6 +444,172 @@ async def create_run(run: TelemetryRun):
         )
 
 
+@app.get("/api/v1/runs")
+async def query_runs(
+    agent_name: Optional[str] = None,
+    status: Optional[str] = None,
+    job_type: Optional[str] = None,
+    created_before: Optional[str] = None,
+    created_after: Optional[str] = None,
+    start_time_from: Optional[str] = None,
+    start_time_to: Optional[str] = None,
+    limit: int = Query(default=100, le=1000, ge=1),
+    offset: int = Query(default=0, ge=0)
+):
+    """
+    Query telemetry runs with filtering support.
+
+    Args:
+        agent_name: Filter by agent name (exact match)
+        status: Filter by status (running, success, failure, etc.)
+        job_type: Filter by job type
+        created_before: ISO8601 timestamp - runs created before this time
+        created_after: ISO8601 timestamp - runs created after this time
+        start_time_from: ISO8601 timestamp - runs started after this time
+        start_time_to: ISO8601 timestamp - runs started before this time
+        limit: Maximum results to return (1-1000, default 100)
+        offset: Pagination offset (default 0)
+
+    Returns:
+        List[Dict]: Array of run objects with all database fields
+
+    Raises:
+        HTTPException: 400 if validation fails, 500 for database errors
+    """
+    with track_duration() as get_duration:
+        # Validate status if provided
+        if status:
+            allowed_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
+            if status not in allowed_statuses:
+                log_error("/api/v1/runs", "ValidationError", f"Invalid status: {status}", status=status)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid status. Must be one of: {allowed_statuses}"
+                )
+
+        # Validate timestamps if provided
+        for ts_name, ts_value in [
+            ('created_before', created_before),
+            ('created_after', created_after),
+            ('start_time_from', start_time_from),
+            ('start_time_to', start_time_to)
+        ]:
+            if ts_value:
+                try:
+                    datetime.fromisoformat(ts_value.replace('Z', '+00:00'))
+                except (ValueError, AttributeError):
+                    log_error("/api/v1/runs", "ValidationError", f"Invalid ISO8601 timestamp for {ts_name}: '{ts_value}'",
+                             timestamp_field=ts_name, timestamp_value=ts_value)
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Invalid ISO8601 timestamp for {ts_name}: '{ts_value}'"
+                    )
+
+        try:
+            with get_db() as conn:
+                conn.row_factory = sqlite3.Row
+
+                # Build dynamic query
+                query = "SELECT * FROM agent_runs WHERE 1=1"
+                params = []
+
+                if agent_name:
+                    query += " AND agent_name = ?"
+                    params.append(agent_name)
+
+                if status:
+                    query += " AND status = ?"
+                    params.append(status)
+
+                if job_type:
+                    query += " AND job_type = ?"
+                    params.append(job_type)
+
+                if created_before:
+                    query += " AND created_at < ?"
+                    params.append(created_before)
+
+                if created_after:
+                    query += " AND created_at > ?"
+                    params.append(created_after)
+
+                if start_time_from:
+                    query += " AND start_time >= ?"
+                    params.append(start_time_from)
+
+                if start_time_to:
+                    query += " AND start_time <= ?"
+                    params.append(start_time_to)
+
+                query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+                params.extend([limit, offset])
+
+                # Execute query
+                cursor = conn.execute(query, params)
+                columns = [description[0] for description in cursor.description]
+                results = []
+
+                for row in cursor.fetchall():
+                    run_dict = dict(zip(columns, row))
+
+                    # Parse JSON fields from strings to objects (with error handling)
+                    for json_field in ['metrics_json', 'context_json']:
+                        if run_dict.get(json_field):
+                            try:
+                                run_dict[json_field] = json.loads(run_dict[json_field])
+                            except (json.JSONDecodeError, TypeError) as e:
+                                # Log parse failure for debugging
+                                log_error(
+                                    "/api/v1/runs",
+                                    "JSONParseError",
+                                    f"Failed to parse {json_field}",
+                                    event_id=run_dict.get('event_id'),
+                                    field=json_field,
+                                    error=str(e),
+                                    value_preview=run_dict[json_field][:100] if isinstance(run_dict[json_field], str) else None
+                                )
+
+                                # Preserve original string value with error indicator
+                                run_dict[f'{json_field}_parse_error'] = str(e)
+                                # Keep run_dict[json_field] as original string (don't set to None)
+
+                    # Convert SQLite integer booleans to Python bool
+                    if 'api_posted' in run_dict:
+                        run_dict['api_posted'] = bool(run_dict['api_posted'])
+
+                    results.append(run_dict)
+
+                # Build query_params dict for logging (exclude None values)
+                query_params = {k: v for k, v in {
+                    "agent_name": agent_name,
+                    "status": status,
+                    "job_type": job_type,
+                    "created_before": created_before,
+                    "created_after": created_after,
+                    "start_time_from": start_time_from,
+                    "start_time_to": start_time_to,
+                    "limit": limit,
+                    "offset": offset
+                }.items() if v is not None}
+
+                # Log successful query with metrics
+                log_query(query_params, len(results), get_duration())
+
+                logger.info(f"[OK] Query returned {len(results)} runs (limit={limit}, offset={offset})")
+                return results
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_error("/api/v1/runs", type(e).__name__, str(e),
+                     agent_name=agent_name, status=status, limit=limit)
+            logger.error(f"[ERROR] Failed to query runs: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to query runs: {str(e)}"
+            )
+
+
 @app.post("/api/v1/runs/batch", response_model=BatchResponse)
 async def create_runs_batch(runs: List[TelemetryRun]):
     """
@@ -489,6 +695,95 @@ async def create_runs_batch(runs: List[TelemetryRun]):
         errors=errors,
         total=len(runs)
     )
+
+
+@app.patch("/api/v1/runs/{event_id}")
+async def update_run(event_id: str, update: RunUpdate):
+    """
+    Update specific fields of an existing run record.
+
+    Args:
+        event_id: Unique event ID of the run to update
+        update: RunUpdate model with fields to update
+
+    Returns:
+        dict: Update confirmation with list of updated fields
+
+    Raises:
+        HTTPException: 404 if run not found, 400 for validation errors, 500 for database errors
+    """
+    with track_duration() as get_duration:
+        updated_field_names = []
+        success = False
+
+        try:
+            with get_db() as conn:
+                # Check if run exists
+                cursor = conn.execute("SELECT 1 FROM agent_runs WHERE event_id = ?", (event_id,))
+                if not cursor.fetchone():
+                    log_error("/api/v1/runs/{event_id}", "NotFound", f"Run not found: {event_id}",
+                             event_id=event_id)
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Run not found: {event_id}"
+                    )
+
+                # Build dynamic UPDATE query
+                update_fields = []
+                params = []
+
+                # Get only the fields that were explicitly set (exclude unset fields)
+                update_data = update.model_dump(exclude_unset=True)
+
+                for field, value in update_data.items():
+                    if value is not None:
+                        # Handle JSON fields
+                        if field in ['metrics_json', 'context_json']:
+                            update_fields.append(f"{field} = ?")
+                            params.append(json.dumps(value))
+                        else:
+                            update_fields.append(f"{field} = ?")
+                            params.append(value)
+                        updated_field_names.append(field)
+
+                if not update_fields:
+                    log_error("/api/v1/runs/{event_id}", "ValidationError", "No valid fields to update",
+                             event_id=event_id)
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="No valid fields to update"
+                    )
+
+                # Execute UPDATE
+                params.append(event_id)
+                query = f"UPDATE agent_runs SET {', '.join(update_fields)} WHERE event_id = ?"
+
+                conn.execute(query, params)
+                conn.commit()
+                success = True
+
+                # Log successful update
+                log_update(event_id, updated_field_names, get_duration(), success=True)
+
+                logger.info(f"[OK] Updated run {event_id}: {updated_field_names}")
+
+                return {
+                    "event_id": event_id,
+                    "updated": True,
+                    "fields_updated": updated_field_names
+                }
+
+        except HTTPException:
+            # Re-raise HTTP exceptions (404, 400)
+            raise
+        except Exception as e:
+            log_error("/api/v1/runs/{event_id}", type(e).__name__, str(e),
+                     event_id=event_id, fields=updated_field_names)
+            logger.error(f"[ERROR] Failed to update run {event_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to update run: {str(e)}"
+            )
 
 
 # Signal handlers for graceful shutdown
