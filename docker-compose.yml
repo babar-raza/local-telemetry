@@ -36,6 +36,14 @@ services:
       # Logging
       - TELEMETRY_LOG_LEVEL=INFO
 
+      # Authentication (disabled by default for localhost/development)
+      # - TELEMETRY_API_AUTH_ENABLED=false
+      # - TELEMETRY_API_AUTH_TOKEN=your-secret-token-here
+
+      # Rate Limiting (disabled by default for localhost/development)
+      # - TELEMETRY_RATE_LIMIT_ENABLED=false
+      # - TELEMETRY_RATE_LIMIT_RPM=60  # Requests per minute
+
     # Restart policy - always restart (including when Docker starts)
     restart: always
 

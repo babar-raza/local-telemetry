@@ -293,6 +293,12 @@ class TelemetryAPIConfig:
 
     # Security
     LOCK_FILE: str = os.getenv("TELEMETRY_LOCK_FILE", "./telemetry_api.lock")
+    API_AUTH_ENABLED: bool = os.getenv("TELEMETRY_API_AUTH_ENABLED", "false").lower() in ("true", "1", "yes", "on")
+    API_AUTH_TOKEN: Optional[str] = os.getenv("TELEMETRY_API_AUTH_TOKEN")
+
+    # Rate Limiting
+    RATE_LIMIT_ENABLED: bool = os.getenv("TELEMETRY_RATE_LIMIT_ENABLED", "false").lower() in ("true", "1", "yes", "on")
+    RATE_LIMIT_RPM: int = int(os.getenv("TELEMETRY_RATE_LIMIT_RPM", "60"))  # Requests per minute
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
@@ -342,6 +348,13 @@ class TelemetryAPIConfig:
             except Exception as e:
                 errors.append(f"Cannot create buffer directory {buffer_dir}: {e}")
 
+        # Authentication validation
+        if cls.API_AUTH_ENABLED and not cls.API_AUTH_TOKEN:
+            errors.append(
+                "CRITICAL: TELEMETRY_API_AUTH_ENABLED=true but TELEMETRY_API_AUTH_TOKEN "
+                "is not set. Provide a bearer token or disable authentication."
+            )
+
         # Print warnings
         for warning in warnings:
             logger.warning(warning)
@@ -360,6 +373,7 @@ class TelemetryAPIConfig:
     @classmethod
     def print_config(cls):
         """Print current configuration (for debugging)."""
+        masked_token = "***REDACTED***" if cls.API_AUTH_TOKEN else "None"
         print("=" * 70)
         print("TELEMETRY API CONFIGURATION")
         print("=" * 70)
@@ -371,5 +385,8 @@ class TelemetryAPIConfig:
         print(f"DB Synchronous:  {cls.DB_SYNCHRONOUS} (MUST BE FULL)")
         print(f"Buffer Dir:      {cls.BUFFER_DIR}")
         print(f"Lock File:       {cls.LOCK_FILE}")
+        print(f"Auth Enabled:    {cls.API_AUTH_ENABLED}")
+        print(f"Auth Token:      {masked_token}")
+        print(f"Rate Limit:      {'Enabled' if cls.RATE_LIMIT_ENABLED else 'Disabled'} ({cls.RATE_LIMIT_RPM} req/min)")
         print(f"Log Level:       {cls.LOG_LEVEL}")
         print("=" * 70)

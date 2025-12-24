@@ -40,7 +40,7 @@ from typing import List, Optional, Dict, Any
 from contextlib import contextmanager
 
 try:
-    from fastapi import FastAPI, HTTPException, status, Query
+    from fastapi import FastAPI, HTTPException, status, Query, Header, Depends, Request
     from fastapi.responses import JSONResponse
     from pydantic import BaseModel, Field, field_validator
     import uvicorn
@@ -190,6 +190,151 @@ class RunUpdate(BaseModel):
         if v is not None and v < 0:
             raise ValueError("Value must be non-negative")
         return v
+
+
+# Authentication dependency
+async def verify_auth(authorization: Optional[str] = Header(None)):
+    """
+    Verify API authentication if enabled.
+
+    Args:
+        authorization: Authorization header value (e.g., "Bearer <token>")
+
+    Raises:
+        HTTPException: 401 Unauthorized if auth is enabled and token is invalid
+
+    Notes:
+        - Authentication is disabled by default (TELEMETRY_API_AUTH_ENABLED=false)
+        - When disabled, this dependency passes through without validation
+        - When enabled, requires "Bearer <token>" format matching TELEMETRY_API_AUTH_TOKEN
+    """
+    # If auth is disabled, allow all requests
+    if not TelemetryAPIConfig.API_AUTH_ENABLED:
+        return None
+
+    # Auth is enabled - validate token
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authorization header required. Use: Authorization: Bearer <token>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    # Check for Bearer token format
+    parts = authorization.split()
+    if len(parts) != 2 or parts[0].lower() != "bearer":
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization format. Use: Authorization: Bearer <token>",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = parts[1]
+
+    # Validate token matches configured value
+    if token != TelemetryAPIConfig.API_AUTH_TOKEN:
+        logger.warning(f"Invalid API token attempted")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return token
+
+
+# Rate Limiting
+class RateLimiter:
+    """
+    Simple sliding window rate limiter using in-memory storage.
+
+    Tracks request counts per IP address within a time window.
+    For production with multiple workers, consider Redis-based rate limiting.
+    """
+
+    def __init__(self):
+        self.requests: Dict[str, List[float]] = {}  # {client_ip: [timestamp1, timestamp2, ...]}
+
+    def check_rate_limit(self, client_ip: str, rpm_limit: int) -> tuple[bool, int]:
+        """
+        Check if client has exceeded rate limit.
+
+        Args:
+            client_ip: Client IP address
+            rpm_limit: Requests per minute limit
+
+        Returns:
+            Tuple of (is_allowed: bool, remaining: int)
+        """
+        now = datetime.now(timezone.utc).timestamp()
+        window_start = now - 60  # 60 seconds = 1 minute
+
+        # Clean up old requests outside the window
+        if client_ip in self.requests:
+            self.requests[client_ip] = [
+                ts for ts in self.requests[client_ip] if ts > window_start
+            ]
+        else:
+            self.requests[client_ip] = []
+
+        # Count requests in current window
+        request_count = len(self.requests[client_ip])
+
+        # Check if limit exceeded
+        if request_count >= rpm_limit:
+            return False, 0
+
+        # Allow request and record timestamp
+        self.requests[client_ip].append(now)
+        remaining = rpm_limit - request_count - 1
+
+        return True, remaining
+
+
+# Global rate limiter instance
+rate_limiter = RateLimiter()
+
+
+async def check_rate_limit(request: Request):
+    """
+    Rate limiting dependency.
+
+    Args:
+        request: FastAPI Request object
+
+    Raises:
+        HTTPException: 429 Too Many Requests if rate limit exceeded
+
+    Notes:
+        - Rate limiting is disabled by default (TELEMETRY_RATE_LIMIT_ENABLED=false)
+        - When disabled, this dependency passes through without validation
+        - When enabled, enforces TELEMETRY_RATE_LIMIT_RPM requests per minute per IP
+    """
+    # If rate limiting is disabled, allow all requests
+    if not TelemetryAPIConfig.RATE_LIMIT_ENABLED:
+        return None
+
+    # Get client IP (handle both direct and proxied requests)
+    client_ip = request.client.host if request.client else "unknown"
+
+    # Check rate limit
+    allowed, remaining = rate_limiter.check_rate_limit(
+        client_ip, TelemetryAPIConfig.RATE_LIMIT_RPM
+    )
+
+    if not allowed:
+        logger.warning(f"Rate limit exceeded for IP: {client_ip}")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded. Max {TelemetryAPIConfig.RATE_LIMIT_RPM} requests per minute.",
+            headers={
+                "Retry-After": "60",  # Tell client to retry after 60 seconds
+                "X-RateLimit-Limit": str(TelemetryAPIConfig.RATE_LIMIT_RPM),
+                "X-RateLimit-Remaining": "0",
+            },
+        )
+
+    return remaining
 
 
 # Database context manager
@@ -349,12 +494,18 @@ async def get_metrics():
 
 
 @app.post("/api/v1/runs", status_code=status.HTTP_201_CREATED)
-async def create_run(run: TelemetryRun):
+async def create_run(
+    run: TelemetryRun,
+    request: Request,
+    _auth: None = Depends(verify_auth),
+    _rate_limit: None = Depends(check_rate_limit)
+):
     """
     Create a single telemetry run.
 
     Args:
         run: TelemetryRun event
+        _auth: Authentication dependency (optional, disabled by default)
 
     Returns:
         dict: Success message with event_id
@@ -446,6 +597,7 @@ async def create_run(run: TelemetryRun):
 
 @app.get("/api/v1/runs")
 async def query_runs(
+    request: Request,
     agent_name: Optional[str] = None,
     status: Optional[str] = None,
     job_type: Optional[str] = None,
@@ -454,7 +606,8 @@ async def query_runs(
     start_time_from: Optional[str] = None,
     start_time_to: Optional[str] = None,
     limit: int = Query(default=100, le=1000, ge=1),
-    offset: int = Query(default=0, ge=0)
+    offset: int = Query(default=0, ge=0),
+    _rate_limit: None = Depends(check_rate_limit)
 ):
     """
     Query telemetry runs with filtering support.
@@ -611,12 +764,18 @@ async def query_runs(
 
 
 @app.post("/api/v1/runs/batch", response_model=BatchResponse)
-async def create_runs_batch(runs: List[TelemetryRun]):
+async def create_runs_batch(
+    runs: List[TelemetryRun],
+    request: Request,
+    _auth: None = Depends(verify_auth),
+    _rate_limit: None = Depends(check_rate_limit)
+):
     """
     Create multiple telemetry runs with deduplication.
 
     Args:
         runs: List of TelemetryRun events
+        _auth: Authentication dependency (optional, disabled by default)
 
     Returns:
         BatchResponse: Statistics about insertion (inserted, duplicates, errors)
@@ -698,13 +857,20 @@ async def create_runs_batch(runs: List[TelemetryRun]):
 
 
 @app.patch("/api/v1/runs/{event_id}")
-async def update_run(event_id: str, update: RunUpdate):
+async def update_run(
+    event_id: str,
+    update: RunUpdate,
+    request: Request,
+    _auth: None = Depends(verify_auth),
+    _rate_limit: None = Depends(check_rate_limit)
+):
     """
     Update specific fields of an existing run record.
 
     Args:
         event_id: Unique event ID of the run to update
         update: RunUpdate model with fields to update
+        _auth: Authentication dependency (optional, disabled by default)
 
     Returns:
         dict: Update confirmation with list of updated fields
