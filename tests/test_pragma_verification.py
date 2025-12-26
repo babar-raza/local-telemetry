@@ -34,7 +34,7 @@ def test_pragma_settings_applied_correctly():
         assert busy_timeout == 30000, f"Expected busy_timeout=30000, got {busy_timeout}"
 
         journal_mode = cursor.execute("PRAGMA journal_mode").fetchone()[0]
-        assert journal_mode.lower() == "wal", f"Expected journal_mode=WAL, got {journal_mode}"
+        assert journal_mode.lower() == "delete", f"Expected journal_mode=DELETE, got {journal_mode}"
 
         synchronous = cursor.execute("PRAGMA synchronous").fetchone()[0]
         assert synchronous == 2, f"Expected synchronous=2 (FULL), got {synchronous}"
@@ -67,7 +67,7 @@ def test_pragma_verification_logging(caplog):
 
         log_message = log_records[0]
         assert "busy_timeout=30000ms" in log_message
-        assert "journal_mode=wal" in log_message.lower()
+        assert "journal_mode=delete" in log_message.lower()
         assert "synchronous=2" in log_message
         assert "wal_autocheckpoint=100" in log_message
 

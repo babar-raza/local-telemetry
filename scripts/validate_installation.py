@@ -288,11 +288,11 @@ def check_database():
             )
 
             journal_mode = pragma_cursor.execute("PRAGMA journal_mode").fetchone()[0]
-            journal_ok = journal_mode.lower() == "wal"
+            journal_ok = journal_mode.lower() == "delete"
             all_passed &= print_check(
                 f"PRAGMA journal_mode: {journal_mode}",
                 journal_ok,
-                "Expected WAL (see database.py:_get_connection)"
+                "Expected DELETE (see database.py:_get_connection)"
             )
 
             synchronous = pragma_cursor.execute("PRAGMA synchronous").fetchone()[0]

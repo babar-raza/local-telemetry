@@ -48,7 +48,7 @@ def test_production_pragma_settings_via_database_writer():
         assert busy_timeout == 30000, f"busy_timeout is {busy_timeout}, expected 30000"
 
         journal_mode = cursor.execute("PRAGMA journal_mode").fetchone()[0]
-        assert journal_mode.lower() == "wal", f"journal_mode is {journal_mode}, expected WAL"
+        assert journal_mode.lower() == "delete", f"journal_mode is {journal_mode}, expected DELETE"
 
         synchronous = cursor.execute("PRAGMA synchronous").fetchone()[0]
         assert synchronous == 2, f"synchronous is {synchronous}, expected 2 (FULL)"
@@ -80,7 +80,7 @@ def test_production_pragma_settings_via_telemetry_client():
             assert busy_timeout == 30000, f"busy_timeout is {busy_timeout}, expected 30000"
 
             journal_mode = cursor.execute("PRAGMA journal_mode").fetchone()[0]
-            assert journal_mode.lower() == "wal", f"journal_mode is {journal_mode}, expected WAL"
+            assert journal_mode.lower() == "delete", f"journal_mode is {journal_mode}, expected DELETE"
 
             synchronous = cursor.execute("PRAGMA synchronous").fetchone()[0]
             assert synchronous == 2, f"synchronous is {synchronous}, expected 2 (FULL)"

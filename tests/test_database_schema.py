@@ -104,8 +104,8 @@ class TestCreateSchema:
         assert "idx_events_run" in indexes
         assert "idx_commits_run" in indexes
 
-    def test_enables_wal_mode(self, tmp_path):
-        """Should enable WAL mode for concurrent access."""
+    def test_enables_delete_mode(self, tmp_path):
+        """Should enable DELETE mode for Docker volume compatibility."""
         db_path = tmp_path / "test.db"
 
         schema.create_schema(str(db_path))
@@ -116,7 +116,7 @@ class TestCreateSchema:
         journal_mode = cursor.fetchone()[0]
         conn.close()
 
-        assert journal_mode.lower() == "wal"
+        assert journal_mode.lower() == "delete"
 
     def test_records_schema_version(self, tmp_path):
         """Should record schema version in migrations table."""
@@ -258,8 +258,8 @@ class TestVerifySchema:
         assert any("idx_runs_status" in msg for msg in messages)
         assert any("idx_runs_start" in msg for msg in messages)
 
-    def test_checks_wal_mode(self, tmp_path):
-        """Should check that WAL mode is enabled."""
+    def test_checks_delete_mode(self, tmp_path):
+        """Should check that DELETE mode is enabled."""
         db_path = tmp_path / "test.db"
         schema.create_schema(str(db_path))
 
@@ -342,15 +342,15 @@ class TestExportSchemaSql:
 
         assert f"Version: {schema.SCHEMA_VERSION}" in content
 
-    def test_sql_file_contains_wal_pragma(self, tmp_path):
-        """SQL file should enable WAL mode."""
+    def test_sql_file_contains_delete_pragma(self, tmp_path):
+        """SQL file should enable DELETE mode."""
         output_path = tmp_path / "schema.sql"
 
         schema.export_schema_sql(str(output_path))
 
         content = output_path.read_text(encoding="utf-8")
 
-        assert "PRAGMA journal_mode=WAL" in content
+        assert "PRAGMA journal_mode=DELETE" in content
 
     def test_creates_parent_directories(self, tmp_path):
         """Should create parent directories if needed."""
