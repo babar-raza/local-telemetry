@@ -191,3 +191,4 @@ site/
 /docs/_archive
 /docs/_audit
 /raw
+/telemetry_buffer
