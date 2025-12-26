@@ -294,6 +294,339 @@ except Exception as e:
     sys.exit(1)
 
 print()
+
+# Test 10: GET /api/v1/runs - Query All Runs
+print("[Test 10] GET /api/v1/runs - Query All Runs")
+try:
+    response = requests.get(f"{API_URL}/api/v1/runs", timeout=5)
+    response.raise_for_status()
+    runs = response.json()
+
+    print(f"  [OK] Returned {len(runs)} runs")
+
+    if len(runs) < 4:
+        print(f"  [FAIL] Expected at least 4 runs, got {len(runs)}")
+        sys.exit(1)
+
+    # Verify structure of first run
+    first_run = runs[0]
+    required_fields = ['event_id', 'run_id', 'agent_name', 'status', 'created_at']
+    for field in required_fields:
+        if field not in first_run:
+            print(f"  [FAIL] Missing required field: {field}")
+            sys.exit(1)
+
+    print(f"  [OK] All runs have required fields")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 11: GET /api/v1/runs - Filter by Agent Name
+print("[Test 11] GET /api/v1/runs - Filter by Agent Name")
+try:
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?agent_name=test-agent",
+        timeout=5
+    )
+    response.raise_for_status()
+    runs = response.json()
+
+    print(f"  [OK] Returned {len(runs)} runs for test-agent")
+
+    if len(runs) != 1:
+        print(f"  [FAIL] Expected 1 run for test-agent, got {len(runs)}")
+        sys.exit(1)
+
+    if runs[0]['agent_name'] != 'test-agent':
+        print(f"  [FAIL] Expected agent_name='test-agent', got '{runs[0]['agent_name']}'")
+        sys.exit(1)
+
+    print(f"  [OK] Filter by agent_name works correctly")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 12: GET /api/v1/runs - Filter by Status
+print("[Test 12] GET /api/v1/runs - Filter by Status")
+try:
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?status=success",
+        timeout=5
+    )
+    response.raise_for_status()
+    runs = response.json()
+
+    print(f"  [OK] Returned {len(runs)} runs with status=success")
+
+    # Verify all have success status
+    for run in runs:
+        if run['status'] != 'success':
+            print(f"  [FAIL] Expected status='success', got '{run['status']}'")
+            sys.exit(1)
+
+    print(f"  [OK] Filter by status works correctly")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 13: GET /api/v1/runs - Pagination (Limit)
+print("[Test 13] GET /api/v1/runs - Pagination (Limit)")
+try:
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?limit=2",
+        timeout=5
+    )
+    response.raise_for_status()
+    runs = response.json()
+
+    print(f"  [OK] Returned {len(runs)} runs (limit=2)")
+
+    if len(runs) != 2:
+        print(f"  [FAIL] Expected 2 runs with limit=2, got {len(runs)}")
+        sys.exit(1)
+
+    print(f"  [OK] Pagination limit works correctly")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 14: GET /api/v1/runs - Invalid Status (400 Error)
+print("[Test 14] GET /api/v1/runs - Invalid Status (400 Error)")
+try:
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?status=invalid_status",
+        timeout=5
+    )
+
+    if response.status_code == 400:
+        error = response.json()
+        print(f"  [OK] Got 400 error as expected")
+        print(f"  [OK] Error: {error['detail']}")
+    else:
+        print(f"  [FAIL] Expected 400 error, got {response.status_code}")
+        sys.exit(1)
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 15: Create a Stale Running Record for PATCH Tests
+print("[Test 15] Create Stale Running Record")
+stale_event_id = str(uuid.uuid4())
+stale_event = {
+    "event_id": stale_event_id,
+    "run_id": "stale-run-001",
+    "start_time": "2025-12-24T10:00:00Z",
+    "created_at": "2025-12-24T10:00:00Z",
+    "agent_name": "hugo-translator",
+    "job_type": "translate_file",
+    "status": "running",
+    "items_discovered": 100,
+    "items_succeeded": 50,
+    "items_failed": 0
+}
+
+try:
+    response = requests.post(f"{API_URL}/api/v1/runs", json=stale_event, timeout=5)
+    response.raise_for_status()
+    result = response.json()
+    print(f"  [OK] Created stale running record: {result['event_id']}")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 16: Query Stale Running Records
+print("[Test 16] Query Stale Running Records")
+try:
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?agent_name=hugo-translator&status=running",
+        timeout=5
+    )
+    response.raise_for_status()
+    runs = response.json()
+
+    print(f"  [OK] Found {len(runs)} stale running records")
+
+    if len(runs) != 1:
+        print(f"  [FAIL] Expected 1 stale run, got {len(runs)}")
+        sys.exit(1)
+
+    if runs[0]['event_id'] != stale_event_id:
+        print(f"  [FAIL] Event ID mismatch")
+        sys.exit(1)
+
+    print(f"  [OK] Query for stale runs works correctly")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 17: PATCH /api/v1/runs/{event_id} - Update to Cancelled
+print("[Test 17] PATCH /api/v1/runs/{event_id} - Update to Cancelled")
+update_data = {
+    "status": "cancelled",
+    "end_time": datetime.now(timezone.utc).isoformat(),
+    "error_summary": "Stale run cleaned up on startup",
+    "output_summary": "Process did not complete - cleanup on restart"
+}
+
+try:
+    response = requests.patch(
+        f"{API_URL}/api/v1/runs/{stale_event_id}",
+        json=update_data,
+        timeout=5
+    )
+    response.raise_for_status()
+    result = response.json()
+
+    print(f"  [OK] Updated: {result['updated']}")
+    print(f"  [OK] Fields updated: {result['fields_updated']}")
+
+    if not result['updated']:
+        print(f"  [FAIL] Expected update success")
+        sys.exit(1)
+
+    expected_fields = ['status', 'end_time', 'error_summary', 'output_summary']
+    if set(result['fields_updated']) != set(expected_fields):
+        print(f"  [FAIL] Fields mismatch. Expected {expected_fields}, got {result['fields_updated']}")
+        sys.exit(1)
+
+    print(f"  [OK] PATCH update successful")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 18: Verify Update Persisted
+print("[Test 18] Verify Update Persisted")
+try:
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?event_id={stale_event_id}",
+        timeout=5
+    )
+    # Note: We don't have event_id filter, so use agent_name
+    response = requests.get(
+        f"{API_URL}/api/v1/runs?agent_name=hugo-translator",
+        timeout=5
+    )
+    response.raise_for_status()
+    runs = response.json()
+
+    updated_run = None
+    for run in runs:
+        if run['event_id'] == stale_event_id:
+            updated_run = run
+            break
+
+    if not updated_run:
+        print(f"  [FAIL] Could not find updated run")
+        sys.exit(1)
+
+    if updated_run['status'] != 'cancelled':
+        print(f"  [FAIL] Expected status='cancelled', got '{updated_run['status']}'")
+        sys.exit(1)
+
+    if not updated_run['error_summary']:
+        print(f"  [FAIL] Expected error_summary to be set")
+        sys.exit(1)
+
+    print(f"  [OK] Status: {updated_run['status']}")
+    print(f"  [OK] Error summary: {updated_run['error_summary'][:50]}...")
+    print(f"  [OK] Update persisted successfully")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 19: PATCH Non-Existent Event (404 Error)
+print("[Test 19] PATCH Non-Existent Event (404 Error)")
+fake_event_id = str(uuid.uuid4())
+
+try:
+    response = requests.patch(
+        f"{API_URL}/api/v1/runs/{fake_event_id}",
+        json={"status": "cancelled"},
+        timeout=5
+    )
+
+    if response.status_code == 404:
+        error = response.json()
+        print(f"  [OK] Got 404 error as expected")
+        print(f"  [OK] Error: {error['detail']}")
+    else:
+        print(f"  [FAIL] Expected 404 error, got {response.status_code}")
+        sys.exit(1)
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 20: PATCH Invalid Status (400 Error)
+print("[Test 20] PATCH Invalid Status (400 Error)")
+try:
+    response = requests.patch(
+        f"{API_URL}/api/v1/runs/{stale_event_id}",
+        json={"status": "invalid_status"},
+        timeout=5
+    )
+
+    if response.status_code == 422:  # Pydantic validation error
+        error = response.json()
+        print(f"  [OK] Got 422 validation error as expected")
+        print(f"  [OK] Error details available")
+    else:
+        print(f"  [FAIL] Expected 422 validation error, got {response.status_code}")
+        sys.exit(1)
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
+
+# Test 21: PATCH Update Metrics Fields
+print("[Test 21] PATCH Update Metrics Fields")
+metrics_update = {
+    "items_succeeded": 75,
+    "items_failed": 25,
+    "duration_ms": 120000
+}
+
+try:
+    response = requests.patch(
+        f"{API_URL}/api/v1/runs/{stale_event_id}",
+        json=metrics_update,
+        timeout=5
+    )
+    response.raise_for_status()
+    result = response.json()
+
+    print(f"  [OK] Updated metrics fields: {result['fields_updated']}")
+
+    if set(result['fields_updated']) != set(['items_succeeded', 'items_failed', 'duration_ms']):
+        print(f"  [FAIL] Fields mismatch")
+        sys.exit(1)
+
+    print(f"  [OK] Metrics update successful")
+except Exception as e:
+    print(f"  [FAIL] {e}")
+    sys.exit(1)
+
+print()
 print("=" * 70)
 print("[SUCCESS] All end-to-end tests passed!")
 print("=" * 70)
@@ -306,7 +639,14 @@ print("  - Single event POST: Working")
 print("  - Event idempotency: Working")
 print("  - Batch POST: Working")
 print("  - Database integrity: Verified")
-print("  - Total events created: 4")
+print("  - GET /api/v1/runs query: Working")
+print("  - GET filters (agent_name, status): Working")
+print("  - GET pagination (limit): Working")
+print("  - GET validation (400 errors): Working")
+print("  - PATCH /api/v1/runs/{event_id}: Working")
+print("  - PATCH validation (404, 422 errors): Working")
+print("  - Stale run cleanup flow: Working")
+print("  - Total events created: 5")
 print("  - Duplicate events rejected: 2")
 print()
 print("The telemetry API service is ready for production use!")
