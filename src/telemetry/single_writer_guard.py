@@ -50,6 +50,10 @@ class SingleWriterGuard:
         """
         Acquire exclusive lock - fails if another instance running.
 
+        Includes stale lock detection for Docker restart scenarios:
+        - If lock holder hostname differs from current, lock is likely stale
+        - Automatically cleans up stale locks from crashed containers
+
         Raises:
             SystemExit: If lock cannot be acquired (another instance running)
         """
@@ -58,9 +62,20 @@ class SingleWriterGuard:
 
         # Check if lock file already exists
         if self.lock_file.exists():
-            # Try to read existing lock info
-            self._print_lock_error()
-            sys.exit(1)
+            # Try to detect stale lock (from crashed Docker container)
+            if self._is_stale_lock():
+                print(f"[WARN] Detected stale lock from crashed container, cleaning up...")
+                try:
+                    self.lock_file.unlink()
+                    print(f"[OK] Removed stale lock file")
+                except Exception as e:
+                    print(f"[ERROR] Failed to remove stale lock: {e}")
+                    self._print_lock_error()
+                    sys.exit(1)
+            else:
+                # Lock is held by active process
+                self._print_lock_error()
+                sys.exit(1)
 
         try:
             # Create and open lock file exclusively
@@ -117,6 +132,70 @@ class SingleWriterGuard:
                 print(f"[WARN] Error releasing lock: {e}")
             finally:
                 self.lock_fd = None
+
+    def _is_stale_lock(self) -> bool:
+        """
+        Detect if existing lock is stale (from crashed container).
+
+        A lock is considered stale if:
+        - Lock holder hostname differs from current hostname (different container)
+        - Lock holder hostname matches but PID doesn't exist (same container restarted)
+
+        In Docker, PID 1 is always the main process. If we're PID 1 and lock says PID 1
+        but we're starting up, the old PID 1 is dead (same container restarted).
+
+        Returns:
+            True if lock appears stale and can be cleaned up
+        """
+        try:
+            with open(self.lock_file, 'r') as f:
+                lock_pid = f.readline().strip()
+                lock_host = f.readline().strip()
+
+            current_host = platform.node()
+            current_pid = os.getpid()
+
+            # Case 1: Different hostname = different container (definitely stale)
+            if lock_host and lock_host != current_host:
+                print(f"[INFO] Lock held by host '{lock_host}', current host is '{current_host}'")
+                return True
+
+            # Case 2: Same hostname - check if it's us restarting
+            # In Docker, we're usually PID 1. If lock says PID 1 from same host,
+            # and we're PID 1 and just starting, the old process is dead.
+            if lock_pid and lock_host == current_host:
+                try:
+                    lock_pid_int = int(lock_pid)
+                    # If lock PID matches our PID on same host, we're restarting
+                    if lock_pid_int == current_pid:
+                        print(f"[INFO] Lock held by same PID {lock_pid} on same host - container restarted")
+                        return True
+                except ValueError:
+                    pass
+
+            # Case 3: On Unix, check if the process actually exists
+            if not self.is_windows and lock_pid:
+                try:
+                    lock_pid_int = int(lock_pid)
+                    # Send signal 0 to check if process exists (doesn't actually signal)
+                    os.kill(lock_pid_int, 0)
+                    # Process exists - not stale
+                    print(f"[INFO] Lock holder PID {lock_pid} is still running")
+                    return False
+                except (ProcessLookupError, OSError):
+                    # Process doesn't exist - stale lock
+                    print(f"[INFO] Lock holder PID {lock_pid} not found - stale lock")
+                    return True
+                except ValueError:
+                    pass
+
+            # Can't determine - be conservative
+            return False
+
+        except Exception as e:
+            # Can't read lock file - assume not stale to be safe
+            print(f"[WARN] Could not read lock file: {e}")
+            return False
 
     def _print_lock_error(self):
         """Print helpful error when lock acquisition fails."""
