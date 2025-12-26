@@ -51,7 +51,7 @@ class RunRecord:
     items_discovered: int = 0
     items_succeeded: int = 0
     items_failed: int = 0
-    duration_ms: Optional[int] = None
+    duration_ms: int = 0  # Default to 0 for running jobs (API requires int, not null)
     input_summary: Optional[str] = None
     output_summary: Optional[str] = None
     error_summary: Optional[str] = None
@@ -158,7 +158,7 @@ class APIPayload:
     items_discovered: int = 0
     items_succeeded: int = 0
     items_failed: int = 0
-    duration_ms: Optional[int] = None
+    duration_ms: int = 0  # Default to 0 for running jobs (API requires int, not null)
     error_summary: Optional[str] = None
     product: Optional[str] = None
     platform: Optional[str] = None
