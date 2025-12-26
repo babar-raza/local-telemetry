@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: local-telemetry-api
-    image: local-telemetry-api:2.0.0
+    image: local-telemetry-api:2.1.0
 
     # Port mapping
     ports:
