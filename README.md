@@ -1,5 +1,7 @@
 # Local Telemetry Platform
 
+[![Contract Tests](https://github.com/anthropics/local-telemetry/actions/workflows/contract_tests.yml/badge.svg)](https://github.com/anthropics/local-telemetry/actions/workflows/contract_tests.yml)
+
 A Python library for tracking agent runs, metrics, and performance with dual-write resilience and optional remote API posting.
 
 ## The Problem
