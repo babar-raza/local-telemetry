@@ -73,14 +73,14 @@ jobs:
         run: |
           export TEST_API_BASE_URL=http://localhost:8765
           export TEST_DB_PATH=/tmp/telemetry_test_data/telemetry.sqlite
-          pytest -m contract tests/contract/invariants/ -v --tb=short --color=yes
+          pytest -m contract tests/contract/invariants/ -v --tb=long --color=yes -vv 2>&1 | tee /tmp/test_output.log || (cat /tmp/test_output.log && exit 1)
 
       - name: Run HTTP API contract tests
         shell: bash
         run: |
           export TEST_API_BASE_URL=http://localhost:8765
           export TEST_DB_PATH=/tmp/telemetry_test_data/telemetry.sqlite
-          pytest -m contract tests/contract/http_api/ -v --tb=short --color=yes
+          pytest -m contract tests/contract/http_api/ -v --tb=long --color=yes -vv 2>&1 | tee /tmp/http_api_test_output.log || (cat /tmp/http_api_test_output.log && exit 1)
 
       - name: Run all contract tests with coverage
         shell: bash
@@ -114,6 +114,8 @@ jobs:
           path: |
             /tmp/telemetry_test_data/
             /tmp/api_service.log
+            /tmp/test_output.log
+            /tmp/http_api_test_output.log
           retention-days: 7
 
       - name: Display test summary
