@@ -220,6 +220,75 @@ class TelemetryClient:
         except Exception as e:
             logger.warning(f"NDJSON write failed: {e}")
 
+    def _update_run_to_api(self, record: RunRecord):
+        """
+        Update run in HTTP API with buffer failover (MIG-008).
+
+        Used by end_run() to update status, end_time, duration, items, etc.
+        Uses PATCH instead of POST to avoid creating duplicates.
+
+        Strategy:
+        1. Try PATCH to HTTP API
+        2. If API unavailable, write to local buffer
+        3. Buffer sync worker will retry later
+
+        Args:
+            record: RunRecord with updated fields
+        """
+        # Convert record to dict (API format)
+        event_dict = record.to_dict()
+
+        # Extract event_id (required for PATCH)
+        event_id = event_dict.get('event_id')
+        if not event_id:
+            logger.error("Cannot update run without event_id")
+            return
+
+        # Build update payload (only fields that should be updated on end_run)
+        update_data = {
+            'status': event_dict.get('status'),
+            'end_time': event_dict.get('end_time'),
+            'duration_ms': event_dict.get('duration_ms'),
+            'items_discovered': event_dict.get('items_discovered'),
+            'items_succeeded': event_dict.get('items_succeeded'),
+            'items_failed': event_dict.get('items_failed'),
+            'input_summary': event_dict.get('input_summary'),
+            'output_summary': event_dict.get('output_summary'),
+            'error_summary': event_dict.get('error_summary'),
+            'metrics_json': event_dict.get('metrics_json'),
+        }
+
+        # Remove None values (don't update fields that weren't set)
+        update_data = {k: v for k, v in update_data.items() if v is not None}
+
+        # Ensure updated_at timestamp
+        update_data['updated_at'] = get_iso8601_timestamp()
+
+        try:
+            # Primary: PATCH to HTTP API
+            result = self.http_api.patch_event(event_id, update_data)
+            logger.debug(
+                f"Event updated in API: {result.get('fields_updated', [])} "
+                f"(event_id={event_id})"
+            )
+
+        except APIUnavailableError as e:
+            # Failover: Write to local buffer (buffer will use POST with full event)
+            logger.warning(f"API unavailable, buffering update: {e}")
+            self.buffer.append(event_dict)
+            logger.info(f"Update buffered locally: {event_id}")
+
+        except Exception as e:
+            # Unexpected error - still buffer the event
+            logger.error(f"Unexpected API error, buffering update: {e}")
+            self.buffer.append(event_dict)
+
+        # Optional: Keep NDJSON backup (for audit trail)
+        try:
+            self.ndjson_writer.append(event_dict)
+        except Exception as e:
+            logger.warning(f"NDJSON write failed: {e}")
+
     def start_run(
         self,
         agent_name: str,
@@ -317,8 +386,8 @@ class TelemetryClient:
                 if hasattr(record, key):
                     setattr(record, key, value)
 
-            # Write to HTTP API (with buffer failover)
-            self._write_run_to_api(record)
+            # Update run in HTTP API using PATCH (with buffer failover)
+            self._update_run_to_api(record)
 
             # Post to Google Sheets API (fire-and-forget, external export)
             try:
@@ -419,12 +488,12 @@ class TelemetryClient:
             self.end_run(run_id, status="success")
 
         except Exception as e:
-            # Exception during run - end with failed status
+            # Exception during run - end with failure status
             if run_id:
                 error_msg = f"{type(e).__name__}: {str(e)}"
                 self.end_run(
                     run_id,
-                    status="failed",
+                    status="failure",
                     error_summary=error_msg,
                 )
 

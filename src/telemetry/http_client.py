@@ -139,6 +139,97 @@ class HTTPAPIClient:
         # Should not reach here
         raise APIUnavailableError(f"Failed to post event after {self.max_retries} attempts")
 
+    def patch_event(self, event_id: str, update_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        PATCH existing telemetry event to update fields.
+
+        Used by end_run() to update status, end_time, duration, items, etc.
+
+        Args:
+            event_id: Unique event ID to update
+            update_data: Dictionary with fields to update (status, end_time, etc.)
+
+        Returns:
+            API response dict with keys: event_id, updated, fields_updated
+
+        Raises:
+            APIUnavailableError: API is down or unreachable
+            APIValidationError: Update validation failed (400 Bad Request)
+            APIError: Other API errors (404 Not Found, 500 Server Error)
+        """
+        endpoint = f"{self.api_url}/api/v1/runs/{event_id}"
+
+        for attempt in range(self.max_retries):
+            try:
+                response = self.session.patch(
+                    endpoint,
+                    json=update_data,
+                    timeout=self.timeout
+                )
+
+                # Handle success (200)
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(
+                        f"Event {event_id} updated successfully: {result.get('fields_updated', [])}"
+                    )
+                    return result
+
+                # Handle not found (404)
+                elif response.status_code == 404:
+                    error_text = response.text
+                    logger.error(f"Event not found: {event_id}")
+                    raise APIValidationError(f"Event not found: {event_id}")
+
+                # Handle validation errors (400)
+                elif response.status_code == 400:
+                    error_text = response.text
+                    logger.error(f"Update validation failed: {error_text}")
+                    raise APIValidationError(f"Invalid update: {error_text}")
+
+                # Handle other errors
+                else:
+                    response.raise_for_status()
+
+            except requests.exceptions.ConnectionError as e:
+                if attempt < self.max_retries - 1:
+                    logger.warning(
+                        f"Connection error (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    time.sleep(self.retry_delay)
+                    continue
+                else:
+                    logger.error(f"API unavailable after {self.max_retries} attempts: {e}")
+                    raise APIUnavailableError(
+                        f"Cannot reach telemetry API at {endpoint}"
+                    ) from e
+
+            except requests.exceptions.Timeout as e:
+                if attempt < self.max_retries - 1:
+                    logger.warning(
+                        f"Timeout (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    time.sleep(self.retry_delay)
+                    continue
+                else:
+                    logger.error(f"API timeout after {self.max_retries} attempts: {e}")
+                    raise APIUnavailableError(
+                        f"Telemetry API timeout: {endpoint}"
+                    ) from e
+
+            except requests.exceptions.HTTPError as e:
+                logger.error(
+                    f"API HTTP error {e.response.status_code}: {e.response.text}"
+                )
+                raise APIError(f"API error: {e}") from e
+
+            except Exception as e:
+                logger.error(f"Unexpected error updating event: {e}")
+                raise APIError(f"Unexpected API error: {e}") from e
+
+        # Should not reach here
+        raise APIUnavailableError(f"Failed to update event after {self.max_retries} attempts")
+
     def post_batch(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         POST batch of telemetry events to API.
