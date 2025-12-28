@@ -32,22 +32,28 @@ jobs:
       - name: Create test data directory
         shell: bash
         run: |
-          mkdir -p /tmp/telemetry_test_data
-          echo "TELEMETRY_STORAGE_BASE_DIR=/tmp/telemetry_test_data" >> $GITHUB_ENV
-          echo "TEST_DB_PATH=/tmp/telemetry_test_data/telemetry.sqlite" >> $GITHUB_ENV
+          TEST_DATA_DIR="${RUNNER_TEMP}/telemetry_test_data"
+          mkdir -p "$TEST_DATA_DIR"
+          echo "TELEMETRY_STORAGE_BASE_DIR=$TEST_DATA_DIR" >> $GITHUB_ENV
+          echo "TEST_DB_PATH=$TEST_DATA_DIR/telemetry.sqlite" >> $GITHUB_ENV
           echo "TEST_API_BASE_URL=http://localhost:8765" >> $GITHUB_ENV
+          echo "TEST_DATA_DIR=$TEST_DATA_DIR" >> $GITHUB_ENV
 
       - name: Initialize test database
         shell: bash
         run: |
-          python scripts/setup_database.py --db-path /tmp/telemetry_test_data/telemetry.sqlite
+          python scripts/setup_database.py --db-path "${TEST_DB_PATH}"
 
       - name: Start API service
         shell: bash
         run: |
-          export TELEMETRY_DB_PATH=/tmp/telemetry_test_data/telemetry.sqlite
-          python telemetry_service.py > /tmp/api_service.log 2>&1 &
-          echo $! > /tmp/api_service.pid
+          export TELEMETRY_DB_PATH="${TEST_DB_PATH}"
+          API_LOG="${RUNNER_TEMP}/api_service.log"
+          API_PID="${RUNNER_TEMP}/api_service.pid"
+          python telemetry_service.py > "$API_LOG" 2>&1 &
+          echo $! > "$API_PID"
+          echo "API_LOG=$API_LOG" >> $GITHUB_ENV
+          echo "API_PID=$API_PID" >> $GITHUB_ENV
           sleep 5  # Wait for service startup
 
       - name: Verify API health
@@ -65,22 +71,26 @@ jobs:
             attempt=$((attempt+1))
           done
           echo "API failed to start. Service logs:"
-          cat /tmp/api_service.log
+          cat "$API_LOG"
           exit 1
 
       - name: Run core invariant contract tests
         shell: bash
         run: |
           export TEST_API_BASE_URL=http://localhost:8765
-          export TEST_DB_PATH=/tmp/telemetry_test_data/telemetry.sqlite
-          pytest -m contract tests/contract/invariants/ -v --tb=long --color=yes -vv 2>&1 | tee /tmp/test_output.log || (cat /tmp/test_output.log && exit 1)
+          export TEST_DB_PATH="${TEST_DB_PATH}"
+          TEST_OUTPUT="${RUNNER_TEMP}/test_output.log"
+          pytest -m contract tests/contract/invariants/ -v --tb=long --color=yes -vv 2>&1 | tee "$TEST_OUTPUT" || (cat "$TEST_OUTPUT" && exit 1)
+          echo "TEST_OUTPUT=$TEST_OUTPUT" >> $GITHUB_ENV
 
       - name: Run HTTP API contract tests
         shell: bash
         run: |
           export TEST_API_BASE_URL=http://localhost:8765
-          export TEST_DB_PATH=/tmp/telemetry_test_data/telemetry.sqlite
-          pytest -m contract tests/contract/http_api/ -v --tb=long --color=yes -vv 2>&1 | tee /tmp/http_api_test_output.log || (cat /tmp/http_api_test_output.log && exit 1)
+          export TEST_DB_PATH="${TEST_DB_PATH}"
+          HTTP_TEST_OUTPUT="${RUNNER_TEMP}/http_api_test_output.log"
+          pytest -m contract tests/contract/http_api/ -v --tb=long --color=yes -vv 2>&1 | tee "$HTTP_TEST_OUTPUT" || (cat "$HTTP_TEST_OUTPUT" && exit 1)
+          echo "HTTP_TEST_OUTPUT=$HTTP_TEST_OUTPUT" >> $GITHUB_ENV
 
       # Combined coverage run disabled due to pytest-cov conflicts
       # Individual test suites (core invariants + HTTP API) provide sufficient coverage
@@ -90,8 +100,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          if [ -f /tmp/api_service.pid ]; then
-            kill $(cat /tmp/api_service.pid) || true
+          if [ -f "$API_PID" ]; then
+            kill $(cat "$API_PID") || true
           fi
           pkill -f telemetry_service.py || true
 
@@ -101,10 +111,10 @@ jobs:
         with:
           name: test-artifacts-windows
           path: |
-            /tmp/telemetry_test_data/
-            /tmp/api_service.log
-            /tmp/test_output.log
-            /tmp/http_api_test_output.log
+            ${{ env.TEST_DATA_DIR }}
+            ${{ env.API_LOG }}
+            ${{ env.TEST_OUTPUT }}
+            ${{ env.HTTP_TEST_OUTPUT }}
           retention-days: 7
 
       - name: Display test summary
