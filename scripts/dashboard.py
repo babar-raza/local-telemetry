@@ -184,8 +184,8 @@ with st.sidebar:
     st.divider()
 
     # Actions
-    refresh_button = st.button("🔄 Refresh Data", use_container_width=True)
-    clear_filters = st.button("🗑️ Clear Filters", use_container_width=True)
+    refresh_button = st.button("🔄 Refresh Data", width='stretch')
+    clear_filters = st.button("🗑️ Clear Filters", width='stretch')
 
 # ============================================================================
 # Main Content - Tabs
@@ -276,7 +276,7 @@ with tab1:
             # Display dataframe
             st.dataframe(
                 df.drop(columns=["event_id"]),  # Hide event_id
-                use_container_width=True,
+                width='stretch',
                 height=600
             )
 
@@ -316,7 +316,7 @@ with tab2:
             help="UUID of the run to edit"
         )
     with col2:
-        fetch_button = st.button("🔍 Fetch Current Values", use_container_width=True)
+        fetch_button = st.button("🔍 Fetch Current Values", width='stretch')
 
     # Initialize session state for form data
     if "edit_form_data" not in st.session_state:
@@ -455,9 +455,9 @@ with tab2:
             # Form buttons
             col1, col2 = st.columns(2)
             with col1:
-                submit_button = st.form_submit_button("✅ Update Run", use_container_width=True)
+                submit_button = st.form_submit_button("✅ Update Run", width='stretch')
             with col2:
-                clear_button = st.form_submit_button("🗑️ Clear Form", use_container_width=True)
+                clear_button = st.form_submit_button("🗑️ Clear Form", width='stretch')
 
         # Handle form submission
         if submit_button:
@@ -570,7 +570,7 @@ with tab3:
             # Show selected runs summary
             with st.expander("📋 View Selected Runs"):
                 selected_df = runs_df[runs_df["run_id"].isin(selected_run_ids)].drop(columns=["event_id"])
-                st.dataframe(selected_df, use_container_width=True)
+                st.dataframe(selected_df, width='stretch')
 
             st.divider()
 
@@ -666,7 +666,7 @@ with tab3:
                 })
 
             preview_df = pd.DataFrame(preview_data)
-            st.dataframe(preview_df, use_container_width=True)
+            st.dataframe(preview_df, width='stretch')
 
             st.divider()
 
@@ -678,7 +678,7 @@ with tab3:
                 execute_button = st.button(
                     f"🚀 Update {len(selected_run_ids)} Run(s)",
                     type="primary",
-                    use_container_width=True
+                    width='stretch'
                 )
 
             if execute_button:
@@ -782,7 +782,7 @@ with tab4:
             )
 
         with col3:
-            refresh_analytics = st.button("🔄 Refresh Charts", use_container_width=True)
+            refresh_analytics = st.button("🔄 Refresh Charts", width='stretch')
 
         # Apply filters
         df_filtered = df_analytics[df_analytics["agent_name"].isin(filter_agents)]
@@ -821,7 +821,7 @@ with tab4:
             }
         )
         fig1.update_layout(height=400)
-        st.plotly_chart(fig1, use_container_width=True)
+        st.plotly_chart(fig1, width='stretch')
 
         st.divider()
 
@@ -844,7 +844,7 @@ with tab4:
             markers=True
         )
         fig2.update_layout(height=400)
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
 
         st.divider()
 
@@ -897,7 +897,7 @@ with tab4:
             height=400
         )
 
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width='stretch')
 
         st.divider()
 
@@ -920,7 +920,7 @@ with tab4:
                 color_discrete_sequence=["#007bff"]
             )
             fig4.update_layout(height=400)
-            st.plotly_chart(fig4, use_container_width=True)
+            st.plotly_chart(fig4, width='stretch')
 
             # Show duration stats
             col1, col2, col3, col4 = st.columns(4)
@@ -952,7 +952,7 @@ with tab4:
             color_continuous_scale="Blues"
         )
         fig5.update_layout(height=500)
-        st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig5, width='stretch')
 
         st.divider()
 
@@ -1057,7 +1057,7 @@ with tab5:
         st.subheader("Preview")
 
         with st.expander("👁️ Preview Export Data (first 100 rows)"):
-            st.dataframe(df_to_export.head(100), use_container_width=True)
+            st.dataframe(df_to_export.head(100), width='stretch')
 
         st.divider()
 
@@ -1077,7 +1077,7 @@ with tab5:
                 data=csv_data,
                 file_name=f"telemetry_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
-                use_container_width=True
+                width='stretch'
             )
 
         with col2:
@@ -1128,7 +1128,7 @@ with tab5:
                 data=excel_data,
                 file_name=f"telemetry_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width='stretch'
             )
 
         with col3:
@@ -1142,7 +1142,7 @@ with tab5:
                 data=json_data,
                 file_name=f"telemetry_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                 mime="application/json",
-                use_container_width=True
+                width='stretch'
             )
 
         st.divider()
