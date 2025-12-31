@@ -127,15 +127,48 @@ with st.sidebar:
 
     st.divider()
 
+    # Fetch metadata for filters (cached)
+    @st.cache_data(ttl=300)  # Cache for 5 minutes
+    def get_filter_options():
+        """Fetch distinct agent names and job types from API."""
+        try:
+            # Fetch a large sample to get all unique values
+            sample_runs = client.get_runs(limit=1000)
+
+            agent_names = sorted(list(set(r.get("agent_name") for r in sample_runs if r.get("agent_name"))))
+            job_types = sorted(list(set(r.get("job_type") for r in sample_runs if r.get("job_type"))))
+
+            return agent_names, job_types
+        except Exception:
+            return [], []
+
+    available_agents, available_job_types = get_filter_options()
+
     # Filters
     st.subheader("Filters")
 
-    # Agent name filter
-    filter_agent = st.text_input(
+    # Show count of available options
+    if available_agents:
+        st.caption(f"📊 {len(available_agents)} agents, {len(available_job_types)} job types")
+
+        # Refresh filter options button
+        if st.button("🔄 Refresh Filter Options", help="Reload agent names and job types"):
+            get_filter_options.clear()
+            st.rerun()
+    else:
+        st.warning("⚠️ No data available. Load some runs first.")
+
+    # Agent name filter (dropdown with auto-populated values)
+    filter_agent = st.selectbox(
         "Agent Name",
-        placeholder="e.g., hugo-translator",
-        help="Filter by agent name (partial match)"
+        options=["All"] + available_agents,
+        index=0,
+        help="Select agent to filter"
     )
+
+    # Convert "All" to None for API query
+    if filter_agent == "All":
+        filter_agent = None
 
     # Status filter
     filter_status = st.multiselect(
@@ -160,12 +193,17 @@ with st.sidebar:
             help="End date (inclusive)"
         )
 
-    # Job type filter
-    filter_job_type = st.text_input(
+    # Job type filter (dropdown with auto-populated values)
+    filter_job_type = st.selectbox(
         "Job Type",
-        placeholder="e.g., Translation",
-        help="Filter by job type"
+        options=["All"] + available_job_types,
+        index=0,
+        help="Select job type to filter"
     )
+
+    # Convert "All" to None for filtering
+    if filter_job_type == "All":
+        filter_job_type = None
 
     # Exclude test data
     exclude_test = st.checkbox(
@@ -243,9 +281,9 @@ with tab1:
             if exclude_test:
                 runs = [r for r in runs if r.get("job_type") != "test"]
 
-            # Filter by job_type if specified
+            # Filter by job_type if specified (exact match)
             if filter_job_type:
-                runs = [r for r in runs if filter_job_type.lower() in (r.get("job_type") or "").lower()]
+                runs = [r for r in runs if r.get("job_type") == filter_job_type]
 
             # Display count
             st.success(f"Found {len(runs)} run(s)")
