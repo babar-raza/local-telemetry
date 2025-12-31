@@ -622,9 +622,8 @@ async def get_metadata(
                 job_types = [row[0] for row in cursor.fetchall()]
 
                 log_query(
-                    "/api/v1/metadata",
-                    params={},
-                    row_count=len(agent_names) + len(job_types),
+                    query_params={},
+                    result_count=len(agent_names) + len(job_types),
                     duration_ms=get_duration()
                 )
 
