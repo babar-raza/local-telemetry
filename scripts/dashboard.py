@@ -898,46 +898,55 @@ with tab4:
         # Chart 3: Item Processing Metrics
         st.subheader("3. Item Processing Metrics")
 
-        # Aggregate items by agent
-        items_data = df_filtered.groupby("agent_name").agg({
-            "items_discovered": "sum",
-            "items_succeeded": "sum",
-            "items_failed": "sum",
-            "items_skipped": "sum"
-        }).reset_index()
+        # Aggregate items by agent (only include columns that exist)
+        agg_dict = {}
+        for col in ["items_discovered", "items_succeeded", "items_failed", "items_skipped"]:
+            if col in df_filtered.columns:
+                agg_dict[col] = "sum"
 
-        if len(items_data) == 0:
+        if not agg_dict:
+            st.info("📊 No item metrics available in the dataset.")
+            items_data = None
+        else:
+            items_data = df_filtered.groupby("agent_name").agg(agg_dict).reset_index()
+
+        if items_data is None or len(items_data) == 0:
             st.info("📊 No item processing data available for the selected filters.")
         else:
             fig3 = go.Figure()
 
-            fig3.add_trace(go.Bar(
-                name="Discovered",
-                x=items_data["agent_name"],
-                y=items_data["items_discovered"],
-                marker_color="#17a2b8"
-            ))
+            # Only add traces for columns that exist
+            if "items_discovered" in items_data.columns:
+                fig3.add_trace(go.Bar(
+                    name="Discovered",
+                    x=items_data["agent_name"],
+                    y=items_data["items_discovered"],
+                    marker_color="#17a2b8"
+                ))
 
-            fig3.add_trace(go.Bar(
-                name="Succeeded",
-                x=items_data["agent_name"],
-                y=items_data["items_succeeded"],
-                marker_color="#28a745"
-            ))
+            if "items_succeeded" in items_data.columns:
+                fig3.add_trace(go.Bar(
+                    name="Succeeded",
+                    x=items_data["agent_name"],
+                    y=items_data["items_succeeded"],
+                    marker_color="#28a745"
+                ))
 
-            fig3.add_trace(go.Bar(
-                name="Failed",
-                x=items_data["agent_name"],
-                y=items_data["items_failed"],
-                marker_color="#dc3545"
-            ))
+            if "items_failed" in items_data.columns:
+                fig3.add_trace(go.Bar(
+                    name="Failed",
+                    x=items_data["agent_name"],
+                    y=items_data["items_failed"],
+                    marker_color="#dc3545"
+                ))
 
-            fig3.add_trace(go.Bar(
-                name="Skipped",
-                x=items_data["agent_name"],
-                y=items_data["items_skipped"],
-                marker_color="#ffc107"
-            ))
+            if "items_skipped" in items_data.columns:
+                fig3.add_trace(go.Bar(
+                    name="Skipped",
+                    x=items_data["agent_name"],
+                    y=items_data["items_skipped"],
+                    marker_color="#ffc107"
+                ))
 
             fig3.update_layout(
                 title="Item Processing by Agent",
