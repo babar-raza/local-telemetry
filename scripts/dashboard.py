@@ -130,16 +130,12 @@ with st.sidebar:
     # Fetch metadata for filters (cached)
     @st.cache_data(ttl=300)  # Cache for 5 minutes
     def get_filter_options():
-        """Fetch distinct agent names and job types from API."""
+        """Fetch ALL distinct agent names and job types from database via metadata endpoint."""
         try:
-            # Fetch a large sample to get all unique values
-            sample_runs = client.get_runs(limit=1000)
-
-            agent_names = sorted(list(set(r.get("agent_name") for r in sample_runs if r.get("agent_name"))))
-            job_types = sorted(list(set(r.get("job_type") for r in sample_runs if r.get("job_type"))))
-
-            return agent_names, job_types
-        except Exception:
+            metadata = client.get_metadata()
+            return metadata.get("agent_names", []), metadata.get("job_types", [])
+        except Exception as e:
+            st.warning(f"⚠️ Could not load filter options: {str(e)}")
             return [], []
 
     available_agents, available_job_types = get_filter_options()

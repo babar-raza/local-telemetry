@@ -595,6 +595,57 @@ async def create_run(
         )
 
 
+@app.get("/api/v1/metadata")
+async def get_metadata(
+    _rate_limit: None = Depends(check_rate_limit)
+):
+    """
+    Get metadata about available filter options.
+
+    Returns:
+        Dict with distinct agent_names and job_types from the database
+
+    Raises:
+        HTTPException: 500 for database errors
+    """
+    with track_duration() as get_duration:
+        try:
+            with get_db() as conn:
+                cursor = conn.cursor()
+
+                # Get distinct agent names
+                cursor.execute("SELECT DISTINCT agent_name FROM agent_runs WHERE agent_name IS NOT NULL ORDER BY agent_name")
+                agent_names = [row[0] for row in cursor.fetchall()]
+
+                # Get distinct job types
+                cursor.execute("SELECT DISTINCT job_type FROM agent_runs WHERE job_type IS NOT NULL ORDER BY job_type")
+                job_types = [row[0] for row in cursor.fetchall()]
+
+                log_query(
+                    "/api/v1/metadata",
+                    params={},
+                    row_count=len(agent_names) + len(job_types),
+                    duration_ms=get_duration()
+                )
+
+                return {
+                    "agent_names": agent_names,
+                    "job_types": job_types,
+                    "counts": {
+                        "agent_names": len(agent_names),
+                        "job_types": len(job_types)
+                    }
+                }
+
+        except Exception as e:
+            log_error("/api/v1/metadata", "DatabaseError", str(e))
+            logger.error(f"[ERROR] Failed to fetch metadata: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch metadata: {str(e)}"
+            )
+
+
 @app.get("/api/v1/runs")
 async def query_runs(
     request: Request,
