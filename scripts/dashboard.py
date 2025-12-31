@@ -295,8 +295,12 @@ with tab1:
                 st.info(f"Selected event_id: {selected_event_id}")
                 st.info("Switch to the 'Edit Single Run' tab to modify this record.")
 
+    except requests.RequestException as e:
+        st.error(f"❌ Failed to connect to API: {str(e)}")
+        st.info(f"Please ensure the API service is running at {API_BASE_URL}")
+        st.code(f"curl {API_BASE_URL}/health", language="bash")
     except Exception as e:
-        st.error(f"Error loading data: {str(e)}")
+        st.error(f"❌ Error loading data: {str(e)}")
         st.exception(e)
 
 # ============================================================================
@@ -335,8 +339,11 @@ with tab2:
                     st.success(f"✅ Loaded run: {run_data.get('agent_name')} - {run_data.get('job_type')}")
                 else:
                     st.error(f"❌ No run found with event_id: {event_id_input}")
+        except requests.RequestException as e:
+            st.error(f"❌ Failed to fetch data from API: {str(e)}")
+            st.info("Please ensure the API service is running and accessible at " + API_BASE_URL)
         except Exception as e:
-            st.error(f"Error fetching run: {str(e)}")
+            st.error(f"❌ Error fetching run: {str(e)}")
 
     # Display edit form if data is loaded
     if st.session_state.edit_form_data:
@@ -804,24 +811,27 @@ with tab4:
 
         status_by_agent = df_filtered.groupby(["agent_name", "status"]).size().reset_index(name="count")
 
-        fig1 = px.bar(
-            status_by_agent,
-            x="agent_name",
-            y="count",
-            color="status",
-            title="Run Status Distribution by Agent",
-            labels={"count": "Number of Runs", "agent_name": "Agent Name"},
-            color_discrete_map={
-                "success": "#28a745",
-                "failed": "#dc3545",
-                "running": "#ffc107",
-                "partial": "#fd7e14",
-                "timeout": "#6c757d",
-                "cancelled": "#17a2b8"
-            }
-        )
-        fig1.update_layout(height=400)
-        st.plotly_chart(fig1, width='stretch')
+        if len(status_by_agent) == 0:
+            st.info("📊 No status data available for the selected filters.")
+        else:
+            fig1 = px.bar(
+                status_by_agent,
+                x="agent_name",
+                y="count",
+                color="status",
+                title="Run Status Distribution by Agent",
+                labels={"count": "Number of Runs", "agent_name": "Agent Name"},
+                color_discrete_map={
+                    "success": "#28a745",
+                    "failed": "#dc3545",
+                    "running": "#ffc107",
+                    "partial": "#fd7e14",
+                    "timeout": "#6c757d",
+                    "cancelled": "#17a2b8"
+                }
+            )
+            fig1.update_layout(height=400)
+            st.plotly_chart(fig1, width='stretch')
 
         st.divider()
 
@@ -834,17 +844,20 @@ with tab4:
 
         timeline_data = df_timeline.groupby(["date", "agent_name"]).size().reset_index(name="count")
 
-        fig2 = px.line(
-            timeline_data,
-            x="date",
-            y="count",
-            color="agent_name",
-            title="Daily Agent Activity",
-            labels={"count": "Number of Runs", "date": "Date"},
-            markers=True
-        )
-        fig2.update_layout(height=400)
-        st.plotly_chart(fig2, width='stretch')
+        if len(timeline_data) == 0:
+            st.info("📊 No timeline data available for the selected filters.")
+        else:
+            fig2 = px.line(
+                timeline_data,
+                x="date",
+                y="count",
+                color="agent_name",
+                title="Daily Agent Activity",
+                labels={"count": "Number of Runs", "date": "Date"},
+                markers=True
+            )
+            fig2.update_layout(height=400)
+            st.plotly_chart(fig2, width='stretch')
 
         st.divider()
 
@@ -859,45 +872,48 @@ with tab4:
             "items_skipped": "sum"
         }).reset_index()
 
-        fig3 = go.Figure()
+        if len(items_data) == 0:
+            st.info("📊 No item processing data available for the selected filters.")
+        else:
+            fig3 = go.Figure()
 
-        fig3.add_trace(go.Bar(
-            name="Discovered",
-            x=items_data["agent_name"],
-            y=items_data["items_discovered"],
-            marker_color="#17a2b8"
-        ))
+            fig3.add_trace(go.Bar(
+                name="Discovered",
+                x=items_data["agent_name"],
+                y=items_data["items_discovered"],
+                marker_color="#17a2b8"
+            ))
 
-        fig3.add_trace(go.Bar(
-            name="Succeeded",
-            x=items_data["agent_name"],
-            y=items_data["items_succeeded"],
-            marker_color="#28a745"
-        ))
+            fig3.add_trace(go.Bar(
+                name="Succeeded",
+                x=items_data["agent_name"],
+                y=items_data["items_succeeded"],
+                marker_color="#28a745"
+            ))
 
-        fig3.add_trace(go.Bar(
-            name="Failed",
-            x=items_data["agent_name"],
-            y=items_data["items_failed"],
-            marker_color="#dc3545"
-        ))
+            fig3.add_trace(go.Bar(
+                name="Failed",
+                x=items_data["agent_name"],
+                y=items_data["items_failed"],
+                marker_color="#dc3545"
+            ))
 
-        fig3.add_trace(go.Bar(
-            name="Skipped",
-            x=items_data["agent_name"],
-            y=items_data["items_skipped"],
-            marker_color="#ffc107"
-        ))
+            fig3.add_trace(go.Bar(
+                name="Skipped",
+                x=items_data["agent_name"],
+                y=items_data["items_skipped"],
+                marker_color="#ffc107"
+            ))
 
-        fig3.update_layout(
-            title="Item Processing by Agent",
-            xaxis_title="Agent Name",
-            yaxis_title="Item Count",
-            barmode="group",
-            height=400
-        )
+            fig3.update_layout(
+                title="Item Processing by Agent",
+                xaxis_title="Agent Name",
+                yaxis_title="Item Count",
+                barmode="group",
+                height=400
+            )
 
-        st.plotly_chart(fig3, width='stretch')
+            st.plotly_chart(fig3, width='stretch')
 
         st.divider()
 
@@ -943,16 +959,19 @@ with tab4:
         # Prepare data for treemap
         job_type_data = df_filtered.groupby(["agent_name", "job_type"]).size().reset_index(name="count")
 
-        fig5 = px.treemap(
-            job_type_data,
-            path=["agent_name", "job_type"],
-            values="count",
-            title="Job Type Distribution by Agent",
-            color="count",
-            color_continuous_scale="Blues"
-        )
-        fig5.update_layout(height=500)
-        st.plotly_chart(fig5, width='stretch')
+        if len(job_type_data) == 0:
+            st.info("📊 No job type data available for the selected filters.")
+        else:
+            fig5 = px.treemap(
+                job_type_data,
+                path=["agent_name", "job_type"],
+                values="count",
+                title="Job Type Distribution by Agent",
+                color="count",
+                color_continuous_scale="Blues"
+            )
+            fig5.update_layout(height=500)
+            st.plotly_chart(fig5, width='stretch')
 
         st.divider()
 
@@ -1049,20 +1068,29 @@ with tab5:
         if limit_rows > 0:
             df_to_export = df_to_export.head(limit_rows)
 
-        st.success(f"✅ {len(df_to_export)} row(s) with {len(df_to_export.columns)} column(s) ready to export")
+        if len(df_to_export) == 0:
+            st.warning("⚠️ No data to export with current filters. Try adjusting your criteria.")
+        else:
+            st.success(f"✅ {len(df_to_export)} row(s) with {len(df_to_export.columns)} column(s) ready to export")
 
         st.divider()
 
         # Preview
         st.subheader("Preview")
 
-        with st.expander("👁️ Preview Export Data (first 100 rows)"):
-            st.dataframe(df_to_export.head(100), width='stretch')
+        if len(df_to_export) > 0:
+            with st.expander("👁️ Preview Export Data (first 100 rows)"):
+                st.dataframe(df_to_export.head(100), width='stretch')
 
         st.divider()
 
         # Export buttons
         st.subheader("Export Options")
+
+        # Only show export buttons if there's data
+        if len(df_to_export) == 0:
+            st.warning("⚠️ No data available to export. Please load data in the Browse tab first.")
+            st.stop()
 
         col1, col2, col3 = st.columns(3)
 

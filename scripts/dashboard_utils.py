@@ -103,3 +103,19 @@ def validate_json(json_str: str) -> tuple[bool, str]:
         return True, ""
     except json.JSONDecodeError as e:
         return False, str(e)
+
+
+def safe_get(record: Dict, key: str, default: Any = None) -> Any:
+    """Safely get value from dict with null/missing handling."""
+    value = record.get(key, default)
+    return value if value is not None else default
+
+
+def validate_record(record: Dict) -> tuple[bool, List[str]]:
+    """Validate record has minimum required fields."""
+    errors = []
+    required = ["event_id", "run_id", "agent_name", "status"]
+    for field in required:
+        if not record.get(field):
+            errors.append(f"Missing required field: {field}")
+    return len(errors) == 0, errors
