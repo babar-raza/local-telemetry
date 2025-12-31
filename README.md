@@ -246,6 +246,126 @@ For performance benchmarks and optimization details, see [docs/DEPLOYMENT_GUIDE.
 
 See [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) for complete API reference and deployment instructions.
 
+## Interactive Dashboard
+
+The telemetry platform includes a Streamlit-based web dashboard for viewing and editing agent run data through an intuitive UI.
+
+**Features:**
+- 📋 **Browse Runs**: Search, filter, and paginate through all agent runs
+- ✏️ **Edit Single Run**: Modify any of the 11 editable fields with validation
+- 📝 **Bulk Edit**: Update multiple runs at once with progress tracking
+- 📈 **Analytics**: 5 interactive charts showing success rates, timelines, and metrics
+- 💾 **Export**: Download data as CSV, Excel (multi-sheet), or JSON
+
+**Starting the Dashboard:**
+
+```bash
+# Install dashboard dependencies
+pip install -r requirements-dashboard.txt
+
+# Ensure API service is running
+python telemetry_service.py
+
+# Start the dashboard (in a new terminal)
+streamlit run scripts/dashboard.py
+```
+
+**Windows Users - Streamlit PATH Issue:**
+
+If you installed with `pip install --user` and get "No module named streamlit" error, the streamlit executable may not be in your PATH. Use one of these solutions:
+
+**Option 1: Use full path to streamlit**
+```bash
+C:\Users\<username>\AppData\Roaming\Python\Python313\Scripts\streamlit.exe run scripts/dashboard.py
+```
+
+**Option 2: Add to PATH permanently**
+```bash
+set PATH=%PATH%;C:\Users\%USERNAME%\AppData\Roaming\Python\Python313\Scripts
+streamlit run scripts/dashboard.py
+```
+
+**Option 3: Use virtual environment (recommended)**
+```bash
+python -m venv venv
+venv\Scripts\pip.exe install -r requirements-dashboard.txt
+venv\Scripts\streamlit.exe run scripts/dashboard.py
+```
+
+The dashboard will open in your browser at http://localhost:8501
+
+**Dashboard Tabs:**
+
+1. **Browse Runs**
+   - Filter by agent name, status, date range, job type
+   - Pagination support (10-500 rows per page)
+   - Exclude test data (job_type='test')
+   - Select runs for editing
+
+2. **Edit Single Run**
+   - Fetch run by event_id
+   - Edit all 11 PATCH-allowed fields:
+     - status, end_time, duration_ms
+     - error_summary, error_details, output_summary
+     - items_succeeded, items_failed, items_skipped
+     - metrics_json, context_json
+   - Client-side validation
+   - Real-time updates via PATCH API
+
+3. **Bulk Edit**
+   - Select multiple runs from Browse tab
+   - Choose field to update
+   - Preview changes before applying
+   - Progress bar with success/failure tracking
+   - Retry failed updates
+
+4. **Analytics**
+   - Success Rate by Agent (bar chart)
+   - Agent Activity Timeline (line chart)
+   - Item Processing Metrics (grouped bar chart)
+   - Duration Distribution (histogram)
+   - Job Type Breakdown (treemap)
+   - Summary statistics
+
+5. **Export**
+   - Select columns to include
+   - Filter and limit rows
+   - Preview export data
+   - Download as CSV, Excel (3 sheets), or JSON
+
+**Configuration:**
+
+```bash
+# Optional: Override default API URL
+export TELEMETRY_API_URL=http://localhost:8765
+```
+
+**Editable Fields:**
+
+The dashboard allows editing these 11 fields via the PATCH endpoint:
+
+| Field | Type | Validation |
+|-------|------|------------|
+| status | enum | running, success, failed, partial, timeout, cancelled |
+| end_time | string | ISO 8601 datetime |
+| duration_ms | integer | ≥ 0 |
+| error_summary | string | Max 500 chars |
+| error_details | string | Max 5000 chars |
+| output_summary | string | Max 1000 chars |
+| items_succeeded | integer | ≥ 0 |
+| items_failed | integer | ≥ 0 |
+| items_skipped | integer | ≥ 0 |
+| metrics_json | object | Valid JSON |
+| context_json | object | Valid JSON |
+
+**Use Cases:**
+
+- **Stale Run Cleanup**: Bulk update stuck "running" records to "cancelled"
+- **Error Correction**: Fix incorrect status or item counts
+- **Data Enrichment**: Add output_summary or context_json post-execution
+- **Reporting**: Export filtered data for weekly reports or analysis
+- **Monitoring**: View analytics charts to identify performance trends
+
 ## Configuration
 
 All configuration via environment variables:
