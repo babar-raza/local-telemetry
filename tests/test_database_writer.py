@@ -8,13 +8,16 @@ Tests cover:
 - API posting status tracking
 - Run statistics
 - Pending API posts retrieval
+
+NO MOCKING - uses real SQLite database with real locks and real errors.
 """
 
 import sys
 import sqlite3
 import tempfile
+import threading
+import time
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -460,32 +463,51 @@ class TestRetryLogic:
         assert success is True
         assert result == (1,)
 
+    @pytest.mark.serial
+    @pytest.mark.slow
+    @pytest.mark.requires_db
     def test_execute_with_retry_handles_lock_error(self, tmp_path):
-        """Test retry logic handles database lock errors."""
+        """Test retry logic handles REAL database lock errors."""
         db_path = tmp_path / "test.sqlite"
 
         create_schema(str(db_path))
 
-        writer = DatabaseWriter(db_path, max_retries=3)
+        writer = DatabaseWriter(db_path, max_retries=5, retry_delay=0.1)
 
-        # Mock execute to raise lock error first 2 times, then succeed
-        original_get_conn = writer._get_connection
-        call_count = {"count": 0}
+        # Create a REAL database lock by holding a transaction in a background thread
+        lock_released = threading.Event()
+        lock_acquired = threading.Event()
 
-        def mock_get_connection():
-            call_count["count"] += 1
-            if call_count["count"] <= 2:
-                # Simulate locked database
-                raise sqlite3.OperationalError("database is locked")
-            return original_get_conn()
+        def create_lock():
+            # Hold an exclusive write lock temporarily
+            conn = sqlite3.connect(str(db_path), timeout=0.05)
+            try:
+                conn.execute("BEGIN EXCLUSIVE")
+                lock_acquired.set()  # Signal that lock is held
+                lock_released.wait(timeout=0.5)  # Wait for test to signal release or timeout
+                conn.rollback()
+            finally:
+                conn.close()
 
-        with patch.object(writer, "_get_connection", side_effect=mock_get_connection):
+        # Start lock in background thread
+        lock_thread = threading.Thread(target=create_lock)
+        lock_thread.start()
+
+        # Wait for thread to acquire lock (max 0.1s)
+        assert lock_acquired.wait(timeout=0.1), "Background thread should acquire lock quickly"
+
+        try:
+            # This should retry until lock is released, then succeed
             sql = "SELECT 1"
             success, result, message = writer._execute_with_retry(sql, (), fetch=True)
 
             # Should eventually succeed after retries
-            # Note: This test may not work perfectly due to retry logic complexity
-            # but demonstrates the concept
+            assert success is True
+            assert result == (1,)
+
+        finally:
+            lock_released.set()  # Signal background thread to release lock
+            lock_thread.join(timeout=2.0)
 
 
 class TestErrorHandling:

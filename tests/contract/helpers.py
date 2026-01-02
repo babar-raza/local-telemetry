@@ -315,7 +315,7 @@ def cleanup_test_runs_from_db(db_path: str) -> int:
 def wait_for_condition(
     predicate: Callable[[], bool],
     timeout: float = 5.0,
-    interval: float = 0.1
+    interval: float = 0.01
 ) -> bool:
     """
     Wait for a condition to become true.
@@ -323,7 +323,7 @@ def wait_for_condition(
     Args:
         predicate: Function that returns True when condition is met
         timeout: Maximum time to wait in seconds
-        interval: Time between checks in seconds
+        interval: Time between checks in seconds (default: 0.01s for fast polling)
 
     Returns:
         True if condition met, False if timeout
@@ -334,6 +334,10 @@ def wait_for_condition(
 
         success = wait_for_condition(check_run_exists, timeout=3)
         assert success, "Run never appeared in database"
+
+    Note:
+        Default interval reduced from 0.1s to 0.01s for 10x faster response times.
+        This reduces average wait time while maintaining the same worst-case timeout.
     """
     start_time = time.time()
 

@@ -30,6 +30,13 @@ from tests.contract.helpers import (
     assert_duplicate_response
 )
 
+# Mark all tests in this module as integration tests requiring API and database
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.requires_api,
+    pytest.mark.requires_db
+]
+
 
 # =============================================================================
 # HTTP-1: POST /api/v1/runs - Create Run
@@ -295,11 +302,10 @@ def test_http_update_run_partial_update(api_base_url, unique_event_id, test_even
     resp = patch_run(api_base_url, unique_event_id, updates)
     assert resp.status_code == 200, f"Expected 200 OK for PATCH, got {resp.status_code}"
 
-    # 3. GET from database to verify update
-    import time
-    time.sleep(0.1)  # Brief delay for DB write
+    # 3. GET from database to verify update (use optimized polling instead of fixed delay)
+    assert wait_for_run_in_db(db_path, unique_event_id, timeout=1.0), \
+        "Run should exist in database after PATCH (waited up to 1.0s)"
     run = get_run_from_db(db_path, unique_event_id)
-    assert run is not None, "Run should exist in database after PATCH"
 
     # 4. Confirm only patched fields changed
     assert run["status"] == "completed", "Status should be updated"
@@ -401,13 +407,10 @@ def test_http_batch_create(api_base_url, test_event_ids, db_path):
     data = resp.json()
     assert "created" in data or "status" in data, "Response should indicate batch creation"
 
-    # Verify all runs created in database
-    import time
-    time.sleep(0.2)  # Brief delay for DB writes
-
+    # Verify all runs created in database (use optimized polling instead of fixed delay)
     for run in runs:
-        db_run = get_run_from_db(db_path, run["event_id"])
-        assert db_run is not None, f"Run {run['event_id']} should exist in database"
+        assert wait_for_run_in_db(db_path, run["event_id"], timeout=1.0), \
+            f"Run {run['event_id']} should exist in database (waited up to 1.0s)"
 
     # Test partial failure handling (duplicates)
     # Re-POST first 2 runs (should be idempotent)

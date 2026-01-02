@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from telemetry import schema
 
 
+@pytest.mark.fast
 class TestSchemaConstants:
     """Test schema constant definitions."""
 
@@ -52,6 +53,8 @@ class TestSchemaConstants:
             assert "CREATE INDEX" in index_sql
 
 
+@pytest.mark.slow
+@pytest.mark.requires_db
 class TestCreateSchema:
     """Test schema creation function."""
 
@@ -178,6 +181,8 @@ class TestCreateSchema:
         assert any("index" in msg.lower() for msg in messages)
 
 
+@pytest.mark.slow
+@pytest.mark.requires_db
 class TestGetSchemaVersion:
     """Test schema version retrieval."""
 
@@ -211,6 +216,8 @@ class TestGetSchemaVersion:
         assert version == 0
 
 
+@pytest.mark.slow
+@pytest.mark.requires_db
 class TestVerifySchema:
     """Test schema verification function."""
 
@@ -294,6 +301,7 @@ class TestVerifySchema:
         assert not success
 
 
+@pytest.mark.fast
 class TestExportSchemaSql:
     """Test schema SQL export function."""
 
@@ -389,6 +397,8 @@ class TestExportSchemaSql:
         assert "commits" in tables
 
 
+@pytest.mark.slow
+@pytest.mark.requires_db
 class TestSchemaConstraints:
     """Test that schema constraints work correctly."""
 
@@ -464,6 +474,9 @@ class TestSchemaConstraints:
         conn.close()
 
 
+@pytest.mark.slow
+@pytest.mark.integration
+@pytest.mark.requires_db
 class TestIntegration:
     """Integration tests for full workflow."""
 

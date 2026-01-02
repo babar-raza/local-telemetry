@@ -30,6 +30,8 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
+    "pytest-xdist>=3.5.0",
+    "pytest-timeout>=2.2.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
 ]
@@ -47,8 +49,16 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 markers = [
+    "contract: Contract tests that lock user-visible behavior (critical)",
+    "regression: Regression tests for bug fixes (semi-locked)",
     "integration: Integration tests (deselect with '-m \"not integration\"')",
-    "slow: Slow-running tests",
+    "unit: Unit tests (flexible)",
+    "performance: Performance baseline tests (optional)",
+    "fast: Tests that complete in <1 second (deselect with '-m \"not fast\"')",
+    "slow: Slow-running tests (deselect with '-m \"not slow\"')",
+    "requires_api: Tests that need HTTP API server on localhost:8765 (deselect with '-m \"not requires_api\"')",
+    "requires_db: Tests that need real database I/O (deselect with '-m \"not requires_db\"')",
+    "serial: Tests that must run sequentially due to shared resources",
 ]
 
 [tool.black]
