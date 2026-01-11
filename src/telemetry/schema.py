@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     trigger_type TEXT CHECK(trigger_type IN ('cli', 'web', 'scheduler', 'mcp', 'manual')),
     start_time TEXT NOT NULL,
     end_time TEXT,
-    status TEXT CHECK(status IN ('running', 'success', 'failed', 'partial', 'timeout', 'cancelled')),
+    status TEXT CHECK(status IN ('running', 'success', 'failure', 'partial', 'timeout', 'cancelled')),
     items_discovered INTEGER DEFAULT 0,
     items_succeeded INTEGER DEFAULT 0,
     items_failed INTEGER DEFAULT 0,

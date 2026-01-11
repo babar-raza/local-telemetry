@@ -56,6 +56,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from telemetry.config import TelemetryAPIConfig
 from telemetry.single_writer_guard import SingleWriterGuard
 from telemetry.logger import log_query, log_update, log_error, track_duration
+from telemetry.url_builder import build_commit_url, build_repo_url
 
 # Configure logging
 logging.basicConfig(
@@ -133,6 +134,26 @@ class TelemetryRun(BaseModel):
     git_branch: Optional[str] = None
     git_commit_hash: Optional[str] = None
     git_run_tag: Optional[str] = None
+    git_commit_source: Optional[str] = Field(
+        None,
+        description="How commit was created: 'manual', 'llm', 'ci'"
+    )
+    git_commit_author: Optional[str] = Field(
+        None,
+        description="Author of the git commit (e.g., 'Name <email>')"
+    )
+    git_commit_timestamp: Optional[str] = Field(
+        None,
+        description="ISO8601 timestamp of when commit was made"
+    )
+
+    @field_validator('git_commit_source')
+    @classmethod
+    def validate_commit_source(cls, v):
+        """Validate git_commit_source is one of allowed values."""
+        if v is not None and v not in ['manual', 'llm', 'ci']:
+            raise ValueError("git_commit_source must be 'manual', 'llm', or 'ci'")
+        return v
 
     # Environment
     host: Optional[str] = None
@@ -174,6 +195,18 @@ class RunUpdate(BaseModel):
     items_skipped: Optional[int] = None
     metrics_json: Optional[Dict[str, Any]] = None
     context_json: Optional[Dict[str, Any]] = None
+    git_commit_source: Optional[str] = Field(
+        None,
+        description="How commit was created: 'manual', 'llm', 'ci'"
+    )
+    git_commit_author: Optional[str] = Field(
+        None,
+        description="Author of the git commit (e.g., 'Name <email>')"
+    )
+    git_commit_timestamp: Optional[str] = Field(
+        None,
+        description="ISO8601 timestamp of when commit was made"
+    )
 
     @field_validator('status')
     @classmethod
@@ -189,6 +222,30 @@ class RunUpdate(BaseModel):
     def validate_non_negative(cls, v):
         if v is not None and v < 0:
             raise ValueError("Value must be non-negative")
+        return v
+
+    @field_validator('git_commit_source')
+    @classmethod
+    def validate_commit_source(cls, v):
+        """Validate git_commit_source is one of allowed values."""
+        if v is not None and v not in ['manual', 'llm', 'ci']:
+            raise ValueError("git_commit_source must be 'manual', 'llm', or 'ci'")
+        return v
+
+
+class CommitAssociation(BaseModel):
+    """Associate a git commit with a telemetry run."""
+    commit_hash: str = Field(..., min_length=7, max_length=40, description="Git commit SHA (7-40 hex characters)")
+    commit_source: str = Field(..., description="How commit was created: 'manual', 'llm', 'ci'")
+    commit_author: Optional[str] = Field(None, description="Author of the commit (e.g., 'Name <email>')")
+    commit_timestamp: Optional[str] = Field(None, description="ISO8601 timestamp of when commit was made")
+
+    @field_validator('commit_source')
+    @classmethod
+    def validate_source(cls, v):
+        """Validate commit_source is one of allowed values."""
+        if v not in ['manual', 'llm', 'ci']:
+            raise ValueError("commit_source must be 'manual', 'llm', or 'ci'")
         return v
 
 
@@ -293,6 +350,39 @@ class RateLimiter:
 
 # Global rate limiter instance
 rate_limiter = RateLimiter()
+
+
+# Status normalization
+STATUS_ALIASES = {
+    'failed': 'failure',      # Legacy alias
+    'completed': 'success',   # Legacy alias
+    'succeeded': 'success',   # Alternative alias
+}
+
+def normalize_status(status: Optional[str]) -> Optional[str]:
+    """
+    Normalize status value from legacy aliases to canonical form.
+
+    Accepts:
+        - Canonical: running, success, failure, partial, timeout, cancelled
+        - Aliases: failed → failure, completed → success, succeeded → success
+
+    Args:
+        status: Status value (may be canonical or alias)
+
+    Returns:
+        Canonical status value or None
+    """
+    if status is None:
+        return None
+
+    # Already canonical
+    canonical_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
+    if status in canonical_statuses:
+        return status
+
+    # Check aliases
+    return STATUS_ALIASES.get(status, status)
 
 
 async def check_rate_limit(request: Request):
@@ -514,6 +604,9 @@ async def create_run(
         HTTPException: If validation fails or database error occurs
     """
     try:
+        # Normalize status from legacy aliases (failed → failure, completed → success)
+        normalized_status = normalize_status(run.status)
+
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO agent_runs (
@@ -547,7 +640,7 @@ async def create_run(
                 )
             """, (
                 run.event_id, run.run_id, run.created_at, run.start_time, run.end_time,
-                run.agent_name, run.job_type, run.status,
+                run.agent_name, run.job_type, normalized_status,
                 run.product, run.product_family, run.platform, run.subdomain,
                 run.website, run.website_section, run.item_name,
                 run.items_discovered, run.items_succeeded, run.items_failed, run.items_skipped,
@@ -680,11 +773,14 @@ async def query_runs(
         HTTPException: 400 if validation fails, 500 for database errors
     """
     with track_duration() as get_duration:
+        # Normalize status from legacy aliases (failed → failure)
+        normalized_status = normalize_status(status)
+
         # Validate status if provided
-        if status:
+        if normalized_status:
             allowed_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
-            if status not in allowed_statuses:
-                log_error("/api/v1/runs", "ValidationError", f"Invalid status: {status}", status=status)
+            if normalized_status not in allowed_statuses:
+                log_error("/api/v1/runs", "ValidationError", f"Invalid status: {normalized_status}", status=normalized_status)
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid status. Must be one of: {allowed_statuses}"
@@ -720,9 +816,9 @@ async def query_runs(
                     query += " AND agent_name = ?"
                     params.append(agent_name)
 
-                if status:
+                if normalized_status:
                     query += " AND status = ?"
-                    params.append(status)
+                    params.append(normalized_status)
 
                 if job_type:
                     query += " AND job_type = ?"
@@ -779,6 +875,20 @@ async def query_runs(
                     # Convert SQLite integer booleans to Python bool
                     if 'api_posted' in run_dict:
                         run_dict['api_posted'] = bool(run_dict['api_posted'])
+
+                    # Add URL fields (commit_url and repo_url)
+                    git_repo = run_dict.get('git_repo')
+                    git_commit_hash = run_dict.get('git_commit_hash')
+
+                    if git_repo and git_commit_hash:
+                        run_dict['commit_url'] = build_commit_url(git_repo, git_commit_hash)
+                    else:
+                        run_dict['commit_url'] = None
+
+                    if git_repo:
+                        run_dict['repo_url'] = build_repo_url(git_repo)
+                    else:
+                        run_dict['repo_url'] = None
 
                     results.append(run_dict)
 
@@ -837,6 +947,9 @@ async def create_runs_batch(
     with get_db() as conn:
         for run in runs:
             try:
+                # Normalize status from legacy aliases
+                normalized_status = normalize_status(run.status)
+
                 conn.execute("""
                     INSERT INTO agent_runs (
                         event_id, run_id, created_at, start_time, end_time,
@@ -869,7 +982,7 @@ async def create_runs_batch(
                     )
                 """, (
                     run.event_id, run.run_id, run.created_at, run.start_time, run.end_time,
-                    run.agent_name, run.job_type, run.status,
+                    run.agent_name, run.job_type, normalized_status,
                     run.product, run.product_family, run.platform, run.subdomain,
                     run.website, run.website_section, run.item_name,
                     run.items_discovered, run.items_succeeded, run.items_failed, run.items_skipped,
@@ -1000,6 +1113,300 @@ async def update_run(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to update run: {str(e)}"
             )
+
+
+@app.get("/api/v1/runs/{event_id}")
+async def get_run_by_event_id(
+    event_id: str,
+    _rate_limit: None = Depends(check_rate_limit)
+):
+    """
+    Get a single run by event_id (direct fetch).
+
+    Args:
+        event_id: Unique event ID of the run
+        _rate_limit: Rate limiting dependency
+
+    Returns:
+        dict: Run object with all fields
+
+    Raises:
+        HTTPException: 404 if run not found, 500 for database errors
+    """
+    with track_duration() as get_duration:
+        try:
+            with get_db() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM agent_runs WHERE event_id = ?",
+                    (event_id,)
+                )
+                row = cursor.fetchone()
+
+                if not row:
+                    log_error(
+                        f"/api/v1/runs/{event_id}",
+                        "NotFound",
+                        f"Run not found: {event_id}",
+                        event_id=event_id
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Run not found: {event_id}"
+                    )
+
+                # Convert row to dict
+                columns = [description[0] for description in cursor.description]
+                run_dict = dict(zip(columns, row))
+
+                # Parse JSON fields
+                for json_field in ['metrics_json', 'context_json']:
+                    if run_dict.get(json_field):
+                        try:
+                            run_dict[json_field] = json.loads(run_dict[json_field])
+                        except (json.JSONDecodeError, TypeError) as e:
+                            log_error(
+                                f"/api/v1/runs/{event_id}",
+                                "JSONParseError",
+                                f"Failed to parse {json_field}",
+                                event_id=event_id,
+                                field=json_field,
+                                error=str(e)
+                            )
+                            run_dict[f'{json_field}_parse_error'] = str(e)
+
+                # Convert api_posted to bool
+                if 'api_posted' in run_dict:
+                    run_dict['api_posted'] = bool(run_dict['api_posted'])
+
+                # Add URL fields
+                git_repo = run_dict.get('git_repo')
+                git_commit_hash = run_dict.get('git_commit_hash')
+
+                if git_repo and git_commit_hash:
+                    run_dict['commit_url'] = build_commit_url(git_repo, git_commit_hash)
+                else:
+                    run_dict['commit_url'] = None
+
+                if git_repo:
+                    run_dict['repo_url'] = build_repo_url(git_repo)
+                else:
+                    run_dict['repo_url'] = None
+
+                logger.info(f"[OK] Fetched run by event_id: {event_id}")
+                return run_dict
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_error(
+                f"/api/v1/runs/{event_id}",
+                type(e).__name__,
+                str(e),
+                event_id=event_id
+            )
+            logger.error(f"[ERROR] Failed to fetch run {event_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch run: {str(e)}"
+            )
+
+
+@app.get("/api/v1/runs/{event_id}/commit-url")
+async def get_commit_url(
+    event_id: str,
+    _auth: None = Depends(verify_auth),
+    _rate_limit: None = Depends(check_rate_limit)
+):
+    """
+    Get GitHub/GitLab/Bitbucket commit URL for a run.
+
+    Args:
+        event_id: Unique event ID of the run
+        _auth: Authentication dependency (optional, disabled by default)
+        _rate_limit: Rate limiting dependency
+
+    Returns:
+        dict: Commit URL or null if git data is missing
+
+    Raises:
+        HTTPException: 404 if run not found, 500 for database errors
+    """
+    try:
+        with get_db() as conn:
+            cursor = conn.execute(
+                "SELECT git_repo, git_commit_hash FROM agent_runs WHERE event_id = ?",
+                (event_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Run not found: {event_id}"
+                )
+
+            repo_url, commit_hash = row
+
+            if not repo_url or not commit_hash:
+                return {"commit_url": None}
+
+            commit_url = build_commit_url(repo_url, commit_hash)
+            return {"commit_url": commit_url}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ERROR] Failed to get commit URL for {event_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get commit URL: {str(e)}"
+        )
+
+
+@app.get("/api/v1/runs/{event_id}/repo-url")
+async def get_repo_url(
+    event_id: str,
+    _auth: None = Depends(verify_auth),
+    _rate_limit: None = Depends(check_rate_limit)
+):
+    """
+    Get GitHub/GitLab/Bitbucket repository URL for a run.
+
+    Args:
+        event_id: Unique event ID of the run
+        _auth: Authentication dependency (optional, disabled by default)
+        _rate_limit: Rate limiting dependency
+
+    Returns:
+        dict: Repository URL or null if git data is missing
+
+    Raises:
+        HTTPException: 404 if run not found, 500 for database errors
+    """
+    try:
+        with get_db() as conn:
+            cursor = conn.execute(
+                "SELECT git_repo FROM agent_runs WHERE event_id = ?",
+                (event_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Run not found: {event_id}"
+                )
+
+            repo_url = row[0]
+
+            if not repo_url:
+                return {"repo_url": None}
+
+            normalized_url = build_repo_url(repo_url)
+            return {"repo_url": normalized_url}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[ERROR] Failed to get repo URL for {event_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to get repo URL: {str(e)}"
+        )
+
+
+@app.post("/api/v1/runs/{event_id}/associate-commit")
+async def associate_commit(
+    event_id: str,
+    association: CommitAssociation,
+    _auth: None = Depends(verify_auth),
+    _rate_limit: None = Depends(check_rate_limit)
+):
+    """
+    Associate a git commit with a telemetry run.
+
+    Args:
+        event_id: Unique event ID of the run
+        association: CommitAssociation model with commit details
+        _auth: Authentication dependency (optional, disabled by default)
+        _rate_limit: Rate limiting dependency
+
+    Returns:
+        dict: Success confirmation with event_id, run_id, and commit_hash
+
+    Raises:
+        HTTPException: 404 if run not found, 422 for validation errors, 500 for database errors
+    """
+    try:
+        with get_db() as conn:
+            # Verify run exists and get run_id
+            cursor = conn.execute(
+                "SELECT run_id FROM agent_runs WHERE event_id = ?",
+                (event_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                log_error(
+                    f"/api/v1/runs/{event_id}/associate-commit",
+                    "NotFound",
+                    f"Run not found: {event_id}",
+                    event_id=event_id
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Run not found: {event_id}"
+                )
+
+            run_id = row[0]
+
+            # Update commit fields
+            conn.execute(
+                """
+                UPDATE agent_runs SET
+                    git_commit_hash = ?,
+                    git_commit_source = ?,
+                    git_commit_author = ?,
+                    git_commit_timestamp = ?,
+                    updated_at = ?
+                WHERE event_id = ?
+                """,
+                (
+                    association.commit_hash,
+                    association.commit_source,
+                    association.commit_author,
+                    association.commit_timestamp,
+                    datetime.now(timezone.utc).isoformat(),
+                    event_id
+                )
+            )
+            conn.commit()
+
+            logger.info(
+                f"[OK] Associated commit {association.commit_hash} with run {event_id}"
+            )
+
+            return {
+                "status": "success",
+                "event_id": event_id,
+                "run_id": run_id,
+                "commit_hash": association.commit_hash
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        log_error(
+            f"/api/v1/runs/{event_id}/associate-commit",
+            type(e).__name__,
+            str(e),
+            event_id=event_id
+        )
+        logger.error(f"[ERROR] Failed to associate commit: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database error: {e}"
+        )
 
 
 # Signal handlers for graceful shutdown

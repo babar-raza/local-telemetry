@@ -56,6 +56,12 @@ class TelemetryAPIClient:
         response.raise_for_status()
         return response.json()
 
+    def get_run_by_id(self, event_id: str) -> Dict[str, Any]:
+        """Get a single run by event_id (direct fetch)."""
+        response = requests.get(f"{self.base_url}/api/v1/runs/{event_id}")
+        response.raise_for_status()
+        return response.json()
+
     def update_run(self, event_id: str, updates: Dict[str, Any]) -> Dict[str, Any]:
         """Update run via PATCH endpoint."""
         # Remove None values (don't update fields not changed)
@@ -100,7 +106,7 @@ def truncate_text(text: Optional[str], max_length: int = 50) -> str:
 
 def validate_status(status: str) -> bool:
     """Validate status enum."""
-    return status in ["running", "success", "failed", "partial", "timeout", "cancelled"]
+    return status in ["running", "success", "failure", "partial", "timeout", "cancelled"]
 
 # ============================================================================
 # Page Configuration
@@ -175,7 +181,7 @@ with st.sidebar:
     # Status filter
     filter_status = st.multiselect(
         "Status",
-        options=["running", "success", "failed", "partial", "timeout", "cancelled"],
+        options=["running", "success", "failure", "partial", "timeout", "cancelled"],
         help="Select one or more statuses"
     )
 
@@ -259,11 +265,6 @@ with tab1:
         if filter_agent:
             query_params["agent_name"] = filter_agent
 
-        if filter_status:
-            # API accepts single status, so we'll query multiple times
-            # For simplicity, let's just use the first status for now
-            query_params["status"] = filter_status[0] if filter_status else None
-
         if filter_date_from:
             query_params["created_after"] = filter_date_from.isoformat()
 
@@ -272,20 +273,45 @@ with tab1:
             end_date = filter_date_to + timedelta(days=1)
             query_params["created_before"] = end_date.isoformat()
 
-        # Fetch data
+        # Server-side job_type filtering
+        if filter_job_type:
+            query_params["job_type"] = filter_job_type
+        elif exclude_test:
+            # If excluding test but no specific job_type selected, we'll filter client-side
+            # (API doesn't support NOT filters yet)
+            pass
+
+        # Fetch data - handle multi-status filtering
         with st.spinner("Loading data..."):
-            runs = client.get_runs(**query_params)
+            if filter_status:
+                # Multi-status filter: query for each status and merge results
+                # (API doesn't support OR semantics yet, so we query multiple times)
+                all_runs = []
+                seen_event_ids = set()
+
+                for status_val in filter_status:
+                    status_query_params = query_params.copy()
+                    status_query_params["status"] = status_val
+
+                    status_runs = client.get_runs(**status_query_params)
+
+                    # Deduplicate by event_id
+                    for run in status_runs:
+                        if run.get("event_id") not in seen_event_ids:
+                            all_runs.append(run)
+                            seen_event_ids.add(run.get("event_id"))
+
+                runs = all_runs
+            else:
+                # No status filter
+                runs = client.get_runs(**query_params)
 
         if not runs:
             st.info("No runs found matching the filters.")
         else:
-            # Filter out test data if requested
-            if exclude_test:
+            # Client-side filtering only for exclude_test when no specific job_type was selected
+            if exclude_test and not filter_job_type:
                 runs = [r for r in runs if r.get("job_type") != "test"]
-
-            # Filter by job_type if specified (exact match)
-            if filter_job_type:
-                runs = [r for r in runs if r.get("job_type") == filter_job_type]
 
             # Display count
             st.success(f"Found {len(runs)} run(s)")
@@ -370,17 +396,20 @@ with tab2:
     if fetch_button and event_id_input:
         try:
             with st.spinner("Fetching run data..."):
-                # Query by event_id - we need to get all runs and filter
-                all_runs = client.get_runs(limit=1000)
-                run_data = next((r for r in all_runs if r.get("event_id") == event_id_input), None)
+                # Direct fetch by event_id using new endpoint
+                run_data = client.get_run_by_id(event_id_input)
 
-                if run_data:
-                    st.session_state.edit_form_data = run_data
-                    st.success(f"✅ Loaded run: {run_data.get('agent_name')} - {run_data.get('job_type')}")
-                else:
-                    st.error(f"❌ No run found with event_id: {event_id_input}")
+                st.session_state.edit_form_data = run_data
+                st.success(f"✅ Loaded run: {run_data.get('agent_name')} - {run_data.get('job_type')}")
+
+        except requests.HTTPError as e:
+            if e.response.status_code == 404:
+                st.error(f"❌ No run found with event_id: {event_id_input}")
+            else:
+                st.error(f"❌ API Error: {e.response.status_code} - {e.response.text}")
+                st.info("Please ensure the API service is running and accessible at " + API_BASE_URL)
         except requests.RequestException as e:
-            st.error(f"❌ Failed to fetch data from API: {str(e)}")
+            st.error(f"❌ Failed to connect to API: {str(e)}")
             st.info("Please ensure the API service is running and accessible at " + API_BASE_URL)
         except Exception as e:
             st.error(f"❌ Error fetching run: {str(e)}")
@@ -408,8 +437,8 @@ with tab2:
             # Status (enum)
             status_value = st.selectbox(
                 "Status *",
-                options=["running", "success", "failed", "partial", "timeout", "cancelled"],
-                index=["running", "success", "failed", "partial", "timeout", "cancelled"].index(run_data.get("status", "running")),
+                options=["running", "success", "failure", "partial", "timeout", "cancelled"],
+                index=["running", "success", "failure", "partial", "timeout", "cancelled"].index(run_data.get("status", "running")),
                 help="Current status of the run"
             )
 
@@ -651,7 +680,7 @@ with tab3:
             if field_to_edit == "status":
                 new_value = st.selectbox(
                     "New Status",
-                    options=["running", "success", "failed", "partial", "timeout", "cancelled"]
+                    options=["running", "success", "failure", "partial", "timeout", "cancelled"]
                 )
             elif field_to_edit == "end_time":
                 new_value = st.text_input(
