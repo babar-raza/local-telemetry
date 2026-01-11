@@ -9,7 +9,6 @@ import pytest
 import tempfile
 import yaml
 from pathlib import Path
-from unittest.mock import patch, MagicMock, call
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
@@ -18,9 +17,10 @@ from verified_todo_update import (
     verify_deliverables_exist,
     run_quality_gate_verification,
     update_todo_if_verified,
-    parse_task_spec_for_deliverables,
+    load_task_spec,
     main
 )
+from quality_gate import parse_task_spec
 
 
 @pytest.fixture
@@ -109,7 +109,8 @@ class TestTaskSpecParsing:
 
     def test_parse_deliverables_from_spec(self, sample_task_spec):
         """Test parsing deliverables from task spec."""
-        deliverables = parse_task_spec_for_deliverables(sample_task_spec)
+        task_spec = parse_task_spec(sample_task_spec)
+        deliverables = task_spec.deliverables
 
         assert len(deliverables) == 2
         assert deliverables[0]['file'] == 'scripts/sample.py'
@@ -125,7 +126,8 @@ Just a description.
         spec_path = temp_project / "empty_spec.md"
         spec_path.write_text(spec_content)
 
-        deliverables = parse_task_spec_for_deliverables(spec_path)
+        task_spec = parse_task_spec(spec_path)
+        deliverables = task_spec.deliverables
 
         assert len(deliverables) == 0
 
@@ -133,62 +135,62 @@ Just a description.
 class TestQualityGateIntegration:
     """Tests for quality gate verification integration."""
 
-    @patch('verified_todo_update.subprocess.run')
-    def test_quality_gate_pass(self, mock_run, sample_task_spec, temp_project):
+    def test_quality_gate_pass(self, sample_task_spec, temp_project):
         """Test successful quality gate verification."""
-        # Mock quality gate success
-        mock_run.return_value = MagicMock(returncode=0, stdout="PASSED", stderr="")
-
-        passed, report_path = run_quality_gate_verification(
+        # Real quality gate with valid deliverables should pass
+        passed, summary = run_quality_gate_verification(
             sample_task_spec,
             temp_project,
             agent_id="test123"
         )
 
         assert passed is True
-        assert report_path is not None
-        mock_run.assert_called_once()
+        assert "Quality Gate" in summary
+        assert "passed" in summary
 
-    @patch('verified_todo_update.subprocess.run')
-    def test_quality_gate_fail(self, mock_run, sample_task_spec, temp_project):
+    def test_quality_gate_fail(self, temp_project):
         """Test failed quality gate verification."""
-        # Mock quality gate failure
-        mock_run.return_value = MagicMock(returncode=1, stdout="FAILED", stderr="")
+        # Create spec with missing deliverables
+        spec_content = """
+# Failed Task
 
-        passed, report_path = run_quality_gate_verification(
-            sample_task_spec,
+**Deliverables**:
+1. **missing.py** (100-200 lines)
+"""
+        spec_path = temp_project / "fail_spec.md"
+        spec_path.write_text(spec_content)
+
+        passed, summary = run_quality_gate_verification(
+            spec_path,
             temp_project,
             agent_id="test123"
         )
 
         assert passed is False
-        assert report_path is not None
+        assert "Quality Gate" in summary or "failures" in summary.lower()
 
-    @patch('verified_todo_update.subprocess.run')
-    def test_quality_gate_error(self, mock_run, sample_task_spec, temp_project):
-        """Test quality gate error."""
-        # Mock quality gate error
-        mock_run.return_value = MagicMock(returncode=2, stdout="", stderr="Error")
+    def test_quality_gate_with_line_count_mismatch(self, temp_project):
+        """Test quality gate with line count mismatch."""
+        # Create file with wrong line count
+        (temp_project / "short.py").write_text("# Short\n" * 10)
 
-        passed, report_path = run_quality_gate_verification(
-            sample_task_spec,
+        spec_content = """
+# Task with Wrong Line Count
+
+**Deliverables**:
+1. **short.py** (100-200 lines)
+"""
+        spec_path = temp_project / "spec.md"
+        spec_path.write_text(spec_content)
+
+        passed, summary = run_quality_gate_verification(
+            spec_path,
             temp_project,
             agent_id="test123"
         )
 
         assert passed is False
-
-    @patch('verified_todo_update.subprocess.run')
-    def test_quality_gate_skip(self, mock_run, sample_task_spec, temp_project):
-        """Test skipping quality gate."""
-        passed, report_path = run_quality_gate_verification(
-            sample_task_spec,
-            temp_project,
-            skip_quality_gate=True
-        )
-
-        assert passed is True
-        mock_run.assert_not_called()
+        assert "failure" in summary.lower() or "failed" in summary.lower()
 
 
 class TestTodoWriteUpdate:
@@ -222,30 +224,56 @@ class TestTodoWriteUpdate:
 class TestMainWorkflow:
     """Integration tests for main workflow."""
 
-    @patch('verified_todo_update.run_quality_gate_verification')
-    @patch('verified_todo_update.verify_deliverables_exist')
-    @patch('verified_todo_update.parse_task_spec_for_deliverables')
-    def test_main_workflow_success(self, mock_parse, mock_verify, mock_gate,
-                                   sample_task_spec, temp_project):
+    def test_main_workflow_success(self, sample_task_spec, temp_project):
         """Test successful main workflow."""
-        # Mock successful verification
-        mock_parse.return_value = [{'file': 'test.py'}]
-        mock_verify.return_value = (True, [])
-        mock_gate.return_value = (True, "report.txt")
+        # Load real task spec
+        task_spec = load_task_spec(sample_task_spec)
 
-        # Would test CLI interface here
-        # Currently tested via bash script integration
+        assert task_spec is not None
+        assert 'deliverables' in task_spec
+        assert len(task_spec['deliverables']) == 2
 
-    @patch('verified_todo_update.verify_deliverables_exist')
-    @patch('verified_todo_update.parse_task_spec_for_deliverables')
-    def test_main_workflow_missing_files(self, mock_parse, mock_verify,
-                                         sample_task_spec, temp_project):
+        # Verify real deliverables
+        all_exist, missing = verify_deliverables_exist(
+            task_spec['deliverables'],
+            temp_project
+        )
+
+        assert all_exist is True
+        assert len(missing) == 0
+
+        # Run real quality gate
+        passed, summary = run_quality_gate_verification(
+            sample_task_spec,
+            temp_project,
+            agent_id="test123"
+        )
+
+        assert passed is True
+
+    def test_main_workflow_missing_files(self, temp_project):
         """Test workflow with missing files."""
-        mock_parse.return_value = [{'file': 'missing.py'}]
-        mock_verify.return_value = (False, ['missing.py'])
+        # Create spec with missing deliverables
+        spec_content = """
+# Task with Missing Files
 
-        # Should fail before quality gate
-        # Exit code 1 expected
+**Deliverables**:
+1. **missing.py** (50-100 lines)
+"""
+        spec_path = temp_project / "spec.md"
+        spec_path.write_text(spec_content)
+
+        # Load real task spec
+        task_spec = load_task_spec(spec_path)
+
+        # Verify deliverables - should fail
+        all_exist, missing = verify_deliverables_exist(
+            task_spec['deliverables'],
+            temp_project
+        )
+
+        assert all_exist is False
+        assert 'missing.py' in missing
 
 
 if __name__ == "__main__":

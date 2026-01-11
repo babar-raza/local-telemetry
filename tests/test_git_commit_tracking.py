@@ -1,5 +1,5 @@
 """
-Tests for Git Commit Tracking (Schema v4)
+Tests for Git Commit Tracking (Schema v6)
 
 Tests cover:
 - Schema v4 fields exist in database
@@ -24,12 +24,12 @@ from telemetry.models import RunRecord, APIPayload, get_iso8601_timestamp
 from telemetry.schema import create_schema, verify_schema, SCHEMA_VERSION
 
 
-class TestSchemaV4Fields:
-    """Test schema v4 has git commit tracking fields."""
+class TestSchemaV6Fields:
+    """Test schema has git commit tracking fields."""
 
     def test_schema_version_is_4(self):
-        """Test that SCHEMA_VERSION is 4."""
-        assert SCHEMA_VERSION == 4
+        """Test that SCHEMA_VERSION is 6."""
+        assert SCHEMA_VERSION == 6
 
     def test_schema_has_git_commit_columns(self, tmp_path):
         """Test that schema creates git commit columns."""

@@ -35,7 +35,7 @@ def create_test_run(event_id: Optional[str] = None, **overrides) -> Dict[str, An
         Complete run payload dict ready for POST /api/v1/runs
 
     Example:
-        payload = create_test_run(status="completed", duration_ms=1000)
+        payload = create_test_run(status="success", duration_ms=1000)
         resp = requests.post(url, json=payload)
     """
     if event_id is None:
@@ -151,7 +151,7 @@ def get_runs(
         requests.Response object
 
     Example:
-        resp = get_runs("http://localhost:8765", {"status": "completed"})
+        resp = get_runs("http://localhost:8765", {"status": "success"})
         runs = resp.json()
     """
     url = f"{api_base_url}/api/v1/runs"
@@ -177,7 +177,7 @@ def patch_run(
         requests.Response object
 
     Example:
-        updates = {"status": "completed", "duration_ms": 1000}
+        updates = {"status": "success", "duration_ms": 1000}
         resp = patch_run("http://localhost:8765", event_id, updates)
         assert resp.status_code == 200
     """
@@ -203,7 +203,7 @@ def get_run_from_db(db_path: str, event_id: str) -> Optional[Dict[str, Any]]:
     Example:
         run = get_run_from_db("/data/telemetry.sqlite", event_id)
         if run:
-            assert run["status"] == "completed"
+            assert run["status"] == "success"
     """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row

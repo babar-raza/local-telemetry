@@ -64,10 +64,10 @@ def writer_process(db_path: str, num_records: int, crash_after: int, ready_event
             # Insert a record
             cursor.execute(
                 """
-                INSERT INTO agent_runs (run_id, event_id, agent_name, start_time, status)
-                VALUES (?, ?, ?, datetime('now'), 'running')
+                INSERT INTO agent_runs (run_id, event_id, agent_name, job_type, start_time, status)
+                VALUES (?, ?, ?, ?, datetime('now'), 'running')
                 """,
-                (f"crash_test_run_{i}", f"crash_test_event_{i}", "crash_test_agent")
+                (f"crash_test_run_{i}", f"crash_test_event_{i}", "crash_test_agent", "crash_test_job")
             )
             conn.commit()  # Commit each record individually
 

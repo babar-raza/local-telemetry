@@ -14,6 +14,7 @@ import os
 import sys
 import json
 import sqlite3
+import argparse
 try:
     import requests
     HAS_REQUESTS = True
@@ -26,14 +27,20 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Dict, Tuple
 from collections import defaultdict
+from telemetry.status import CANONICAL_STATUSES, STATUS_ALIASES, normalize_status
 
 # Configuration
 TELEMETRY_DB_PATH = os.getenv(
     "TELEMETRY_DB_PATH",
     "D:/agent-metrics/db/telemetry.sqlite"
 )
-SHEETS_API_URL = os.getenv("SHEETS_API_URL")  # Required
-SHEETS_API_TOKEN = os.getenv("SHEETS_API_TOKEN")  # Required
+SHEETS_API_URL = os.getenv("GOOGLE_SHEETS_API_URL") or os.getenv("SHEETS_API_URL")
+SHEETS_API_TOKEN = (
+    os.getenv("GOOGLE_SHEETS_API_TOKEN")
+    or os.getenv("SHEETS_API_TOKEN")
+    or os.getenv("METRICS_API_TOKEN")
+)
+DRY_RUN = os.getenv("SHEETS_DRY_RUN", "false").lower() in ("true", "1", "yes", "on")
 BATCH_SIZE = int(os.getenv("SHEETS_BATCH_SIZE", "5"))
 DAYS_BACK = int(os.getenv("SHEETS_SYNC_DAYS", "7"))
 
@@ -43,7 +50,7 @@ def query_runs_for_sync(db_path: str, days_back: int = 7) -> List[Dict]:
     Query runs that need syncing to Google Sheets.
 
     Criteria:
-    - status IN ('success', 'failure', 'partial')
+    - status IN ('success', 'failure', 'partial') plus accepted aliases
     - api_posted = 0 (not yet synced to Google Sheets)
     - start_time within last {days_back} days
 
@@ -56,19 +63,30 @@ def query_runs_for_sync(db_path: str, days_back: int = 7) -> List[Dict]:
 
     cutoff_date = (datetime.now(timezone.utc) - timedelta(days=days_back)).isoformat()
 
-    cursor.execute("""
+    canonical = ["success", "failure", "partial"]
+    alias_values = [
+        alias for alias, canonical_value in STATUS_ALIASES.items()
+        if canonical_value in canonical
+    ]
+    status_values = canonical + alias_values
+    placeholders = ",".join(["?"] * len(status_values))
+
+    cursor.execute(f\"\"\"
         SELECT *
         FROM agent_runs
-        WHERE status IN ('success', 'failure', 'partial')
+        WHERE status IN ({placeholders})
           AND (api_posted = 0 OR api_posted IS NULL)
           AND start_time >= ?
         ORDER BY start_time ASC
-    """, (cutoff_date,))
+    \"\"\", status_values + [cutoff_date])
 
     rows = cursor.fetchall()
     conn.close()
 
-    return [dict(row) for row in rows]
+    runs = [dict(row) for row in rows]
+    for run in runs:
+        run["status"] = normalize_status(run.get("status"))
+    return runs
 
 
 def aggregate_runs(runs: List[Dict]) -> List[Dict]:
@@ -251,18 +269,18 @@ def post_to_sheets_api(
     return successful, failed, errors
 
 
-def mark_as_posted(db_path: str, run_ids: List[str]):
+def mark_as_posted(db_path: str, event_ids: List[str]):
     """Update api_posted flag for successfully synced runs."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    placeholders = ','.join(['?'] * len(run_ids))
+    placeholders = ','.join(['?'] * len(event_ids))
     cursor.execute(f"""
         UPDATE agent_runs
         SET api_posted = 1,
             api_posted_at = ?
-        WHERE run_id IN ({placeholders})
-    """, [datetime.now(timezone.utc).isoformat()] + run_ids)
+        WHERE event_id IN ({placeholders})
+    """, [datetime.now(timezone.utc).isoformat()] + event_ids)
 
     conn.commit()
     updated = cursor.rowcount
@@ -273,22 +291,29 @@ def mark_as_posted(db_path: str, run_ids: List[str]):
 
 def main():
     """Main sync routine."""
+    parser = argparse.ArgumentParser(description="Weekly Google Sheets sync")
+    parser.add_argument("--dry-run", action="store_true", help="Skip API posting and DB updates")
+    args = parser.parse_args()
+    dry_run = args.dry_run or DRY_RUN
+
     print("=" * 70)
     print("WEEKLY GOOGLE SHEETS SYNC")
     print("=" * 70)
     print(f"Start time: {datetime.now().isoformat()}")
     print(f"Database: {TELEMETRY_DB_PATH}")
     print(f"Days back: {DAYS_BACK}")
+    print(f"Dry run: {dry_run}")
     print()
 
     # Validate configuration
-    if not SHEETS_API_URL:
-        print("ERROR: SHEETS_API_URL environment variable not set")
-        sys.exit(1)
+    if not dry_run:
+        if not SHEETS_API_URL:
+            print("ERROR: GOOGLE_SHEETS_API_URL or SHEETS_API_URL not set")
+            sys.exit(1)
 
-    if not SHEETS_API_TOKEN:
-        print("ERROR: SHEETS_API_TOKEN environment variable not set")
-        sys.exit(1)
+        if not SHEETS_API_TOKEN:
+            print("ERROR: GOOGLE_SHEETS_API_TOKEN or SHEETS_API_TOKEN not set")
+            sys.exit(1)
 
     # Step 1: Query runs
     print("Step 1: Querying runs from database...")
@@ -315,12 +340,16 @@ def main():
 
     # Step 4: Post to Google Sheets
     print("\nStep 4: Posting to Google Sheets API...")
-    successful, failed, errors = post_to_sheets_api(
-        events,
-        SHEETS_API_URL,
-        SHEETS_API_TOKEN,
-        BATCH_SIZE
-    )
+    if dry_run:
+        successful, failed, errors = 0, 0, []
+        print("  DRY RUN: skipping API post")
+    else:
+        successful, failed, errors = post_to_sheets_api(
+            events,
+            SHEETS_API_URL,
+            SHEETS_API_TOKEN,
+            BATCH_SIZE
+        )
 
     print(f"\nResults:")
     print(f"  Successful: {successful}")
@@ -332,10 +361,10 @@ def main():
             print(f"  - {error}")
 
     # Step 5: Mark as posted
-    if successful > 0:
+    if successful > 0 and not dry_run:
         print("\nStep 5: Marking runs as posted...")
-        all_run_ids = [run['run_id'] for run in runs]
-        updated = mark_as_posted(TELEMETRY_DB_PATH, all_run_ids)
+        all_event_ids = [run['event_id'] for run in runs if run.get('event_id')]
+        updated = mark_as_posted(TELEMETRY_DB_PATH, all_event_ids)
         print(f"  Updated {updated} runs")
 
     print("\n" + "=" * 70)

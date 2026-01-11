@@ -117,7 +117,41 @@ client.log_event(run_id, "checkpoint", {"step": 1})
 client.end_run(run_id, status="success", items_succeeded=10)
 ```
 
-### 4. Query Your Data
+### 4. Configure Telemetry Clients (Optional)
+
+The library uses a two-client architecture. **Most users only need the default configuration:**
+
+```bash
+# .env (Recommended default - local-telemetry only)
+TELEMETRY_API_URL=http://localhost:8765
+GOOGLE_SHEETS_API_ENABLED=false
+```
+
+**Google Sheets Export (Optional):**
+
+Only enable if you need external reporting:
+
+```bash
+# .env (Dual-client configuration)
+TELEMETRY_API_URL=http://localhost:8765
+GOOGLE_SHEETS_API_URL=https://sheets.googleapis.com/v4/spreadsheets/YOUR_SHEET_ID/values/Sheet1!A1:append
+GOOGLE_SHEETS_API_ENABLED=true
+METRICS_API_TOKEN=your_google_sheets_api_token
+```
+
+**Common Gotchas:**
+
+- Don't set `GOOGLE_SHEETS_API_URL` to `localhost` (causes 404 errors)
+- Google Sheets export is fire-and-forget (failures don't block your agent)
+- Local-telemetry (HTTPAPIClient) is always used as primary backend
+
+For detailed configuration and troubleshooting, see:
+- **[Telemetry Clients Architecture](docs/TELEMETRY_CLIENTS.md)** - Understanding the two-client design
+- **[Configuration Guide](docs/CONFIGURATION.md)** - Complete environment variable reference
+- **[Migration Guide](docs/MIGRATION_GUIDE.md)** - Upgrading from old configuration
+- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+
+### 5. Query Your Data
 
 ```bash
 # Recent runs

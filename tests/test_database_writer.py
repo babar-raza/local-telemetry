@@ -59,8 +59,8 @@ class TestDatabaseConnection:
         assert db_path.exists()
         conn.close()
 
-    def test_get_connection_enables_wal(self, tmp_path):
-        """Test that get_connection enables WAL mode."""
+    def test_get_connection_enables_delete_mode(self, tmp_path):
+        """Test that get_connection enables DELETE mode."""
         db_path = tmp_path / "test.sqlite"
 
         # Create schema first
@@ -69,13 +69,13 @@ class TestDatabaseConnection:
         writer = DatabaseWriter(db_path)
         conn = writer._get_connection()
 
-        # Check WAL mode
+        # Check DELETE mode
         cursor = conn.cursor()
         cursor.execute("PRAGMA journal_mode")
         mode = cursor.fetchone()[0]
 
         conn.close()
-        assert mode.upper() == "WAL"
+        assert mode.upper() == "DELETE"
 
 
 class TestInsertRun:
@@ -425,7 +425,7 @@ class TestRunStatistics:
         writer = DatabaseWriter(db_path)
 
         # Insert runs with different statuses
-        statuses = ["success", "success", "failed", "partial", "success"]
+        statuses = ["success", "success", "failure", "partial", "success"]
         for i, status in enumerate(statuses):
             record = RunRecord(
                 run_id=f"test-run-{i}",
@@ -441,7 +441,7 @@ class TestRunStatistics:
 
         assert stats["total_runs"] == 5
         assert stats["status_counts"]["success"] == 3
-        assert stats["status_counts"]["failed"] == 1
+        assert stats["status_counts"]["failure"] == 1
         assert stats["status_counts"]["partial"] == 1
 
 

@@ -123,7 +123,7 @@ class TestContextManager:
         assert record['status'] == "success"
 
     def test_context_manager_exception_handling(self, telemetry_client):
-        """Test that exceptions are caught and status set to failed."""
+        """Test that exceptions are caught and status set to failure."""
         run_id = None
 
         # Use context manager with exception
@@ -143,7 +143,7 @@ class TestContextManager:
         # Verify run ended with failure status
         record = read_sqlite_record(run_id)
         assert record is not None
-        assert record['status'] == "failed"
+        assert record['status'] == "failure"
         assert record['error_summary'] is not None
         assert "Simulated error" in record['error_summary']
 
@@ -256,5 +256,5 @@ class TestContextManager:
 
         # Verify run failed with outer exception
         record = read_sqlite_record(run_id)
-        assert record['status'] == "failed"
+        assert record['status'] == "failure"
         assert "Outer error" in record['error_summary']

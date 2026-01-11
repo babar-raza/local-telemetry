@@ -51,11 +51,16 @@ class RunRecord:
     items_discovered: int = 0
     items_succeeded: int = 0
     items_failed: int = 0
+    items_skipped: int = 0
     duration_ms: int = 0  # Default to 0 for running jobs (API requires int, not null)
     input_summary: Optional[str] = None
     output_summary: Optional[str] = None
+    source_ref: Optional[str] = None
+    target_ref: Optional[str] = None
     error_summary: Optional[str] = None
+    error_details: Optional[str] = None
     metrics_json: Optional[str] = None
+    context_json: Optional[str] = None
     insight_id: Optional[str] = None  # Links actions to originating insights (SEO Intelligence integration)
     product: Optional[str] = None
     platform: Optional[str] = None
@@ -72,9 +77,11 @@ class RunRecord:
     git_commit_author: Optional[str] = None  # Author of the git commit
     git_commit_timestamp: Optional[str] = None  # When the commit was made (ISO8601)
     host: Optional[str] = None
+    environment: Optional[str] = None
     api_posted: int = 0
     api_posted_at: Optional[str] = None
     api_retry_count: int = 0
+    parent_run_id: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 

@@ -76,7 +76,7 @@ class TestNDJSONAppend:
 
         payloads = [
             {"run_id": "test-1", "status": "success"},
-            {"run_id": "test-2", "status": "failed"},
+            {"run_id": "test-2", "status": "failure"},
             {"run_id": "test-3", "status": "success"},
         ]
 
@@ -186,7 +186,7 @@ class TestReadingFiles:
         # Write some records
         payloads = [
             {"run_id": "test-1", "status": "success"},
-            {"run_id": "test-2", "status": "failed"},
+            {"run_id": "test-2", "status": "failure"},
         ]
 
         for payload in payloads:

@@ -6,6 +6,8 @@ import requests
 import json
 from typing import Dict, List, Optional, Any
 
+from telemetry.status import CANONICAL_STATUSES, normalize_status
+
 
 # ============================================================================
 # API Client
@@ -28,7 +30,11 @@ class TelemetryAPIClient:
     def get_runs(
         self,
         agent_name: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        job_type: Optional[str] = None,
+        run_id_contains: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+        exclude_job_type: Optional[str] = None,
         created_before: Optional[str] = None,
         created_after: Optional[str] = None,
         limit: int = 100,
@@ -43,6 +49,14 @@ class TelemetryAPIClient:
             params["agent_name"] = agent_name
         if status:
             params["status"] = status
+        if job_type:
+            params["job_type"] = job_type
+        if run_id_contains:
+            params["run_id_contains"] = run_id_contains
+        if parent_run_id:
+            params["parent_run_id"] = parent_run_id
+        if exclude_job_type:
+            params["exclude_job_type"] = exclude_job_type
         if created_before:
             params["created_before"] = created_before
         if created_after:
@@ -99,7 +113,7 @@ def truncate_text(text: Optional[str], max_length: int = 50) -> str:
 
 def validate_status(status: str) -> bool:
     """Validate status enum."""
-    return status in ["running", "success", "failed", "partial", "timeout", "cancelled"]
+    return normalize_status(status) in CANONICAL_STATUSES
 
 
 def validate_json(json_str: str) -> tuple[bool, str]:

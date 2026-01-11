@@ -2,12 +2,13 @@
 Tests for agent output file extraction.
 
 Tests automated extraction of file contents from agent output logs.
+
+NO MOCKING - uses real file system operations.
 """
 
 import pytest
 import tempfile
 from pathlib import Path
-from unittest.mock import patch
 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))

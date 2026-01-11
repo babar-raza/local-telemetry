@@ -135,7 +135,7 @@ def sample_run_payload(unique_event_id: str, unique_run_id: str) -> Dict[str, An
 
     Example:
         payload = sample_run_payload
-        payload["status"] = "failed"
+        payload["status"] = "failure"
         api_client.post("/api/v1/runs", json=payload)
     """
     return {
@@ -228,7 +228,7 @@ def cleanup_test_runs(request, db_path: str):
 # Parameterized Fixtures for Test Variations
 # =============================================================================
 
-@pytest.fixture(params=["running", "completed", "failed", "partial"])
+@pytest.fixture(params=["running", "success", "failure", "partial", "timeout", "cancelled"])
 def valid_status(request) -> str:
     """
     Parameterized fixture for testing all valid status values.

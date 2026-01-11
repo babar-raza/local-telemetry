@@ -189,17 +189,35 @@ Enable autonomous agents to instrument their execution with telemetry that:
 ---
 
 ### 7. Status Value Constraints
-**Invariant:** Run status MUST be in the allowed set.
+**Invariant:** Run status MUST be in the canonical set (stored values).
 
-**Allowed:** ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
+**Canonical Statuses (stored in database):**
+- `running`
+- `success`
+- `failure`
+- `partial`
+- `timeout`
+- `cancelled`
+
+**Status Aliases (accepted as input, normalized to canonical):**
+- `failed` → `failure`
+- `completed` → `success`
+- `succeeded` → `success`
 
 **Evidence:**
-- `telemetry_service.py:178-185` - Pydantic validator
-- `telemetry_service.py:634-641` - Query endpoint validation
+- `telemetry_service.py:37-43` - STATUS_ALIASES and CANONICAL_STATUSES
+- `telemetry_service.py:46-69` - normalize_status() function
+- Applied in: POST /api/v1/runs, GET /api/v1/runs, PATCH /api/v1/runs, batch create
 
 **Enforcement:**
-- Pydantic validator raises ValueError if invalid
-- API returns 400 Bad Request
+- Status normalization applied at API boundary
+- Database CHECK constraint enforces canonical values only
+- Query filters automatically normalize aliases before database lookup
+
+**Rationale:**
+- Backward compatibility with legacy 'failed' and 'completed' statuses
+- Consistent storage format (only canonical values in database)
+- Transparent to API clients (aliases "just work")
 
 ---
 

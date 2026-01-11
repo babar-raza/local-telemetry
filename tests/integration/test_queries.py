@@ -145,7 +145,7 @@ class TestQueries:
         cursor.execute("""
             SELECT COUNT(*) FROM agent_runs
             WHERE agent_name LIKE 'query_test_agent%'
-            AND status = 'failed'
+            AND status = 'failure'
         """)
         failed_count = cursor.fetchone()[0]
 

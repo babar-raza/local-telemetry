@@ -304,12 +304,22 @@ def check_database():
             )
 
             wal_checkpoint = pragma_cursor.execute("PRAGMA wal_autocheckpoint").fetchone()[0]
-            checkpoint_ok = wal_checkpoint == 100
-            all_passed &= print_check(
-                f"PRAGMA wal_autocheckpoint: {wal_checkpoint}",
-                checkpoint_ok,
-                "Expected 100 pages to prevent WAL bloat"
-            )
+            checkpoint_ok = True  # Initialize before conditional
+            # WAL autocheckpoint only relevant in WAL mode, not DELETE mode
+            if journal_mode.lower() == "wal":
+                checkpoint_ok = wal_checkpoint == 100
+                all_passed &= print_check(
+                    f"PRAGMA wal_autocheckpoint: {wal_checkpoint}",
+                    checkpoint_ok,
+                    "Expected 100 pages to prevent WAL bloat"
+                )
+            else:
+                # In DELETE mode, WAL autocheckpoint is not used
+                all_passed &= print_check(
+                    f"PRAGMA wal_autocheckpoint: {wal_checkpoint}",
+                    True,  # Always pass in non-WAL mode
+                    "N/A (using journal_mode=DELETE)"
+                )
 
             pragma_conn.close()
 

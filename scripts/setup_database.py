@@ -6,6 +6,7 @@ Idempotent and safe to run multiple times.
 
 Usage:
     python scripts/setup_database.py
+    python scripts/setup_database.py --db-path /path/to/telemetry.sqlite
 
 Exit codes:
     0 - Success
@@ -13,6 +14,8 @@ Exit codes:
 """
 
 import sys
+import os
+import argparse
 from pathlib import Path
 
 # Add src to path for importing telemetry package
@@ -28,6 +31,10 @@ def get_database_path() -> Path:
     Returns:
         Path: Database file path (D:\agent-metrics\db\telemetry.sqlite)
     """
+    env_db_path = Path(os.getenv("TELEMETRY_DB_PATH", "")) if os.getenv("TELEMETRY_DB_PATH") else None
+    if env_db_path:
+        return env_db_path
+
     # Check for D: drive first
     d_drive_path = Path("D:\\agent-metrics\\db\\telemetry.sqlite")
     if d_drive_path.parent.parent.exists():
@@ -49,6 +56,10 @@ def main() -> int:
     Returns:
         int: Exit code (0 = success, 1 = failure)
     """
+    parser = argparse.ArgumentParser(description="Telemetry database setup")
+    parser.add_argument("--db-path", type=Path, help="Path to SQLite database")
+    args = parser.parse_args()
+
     print("=" * 70)
     print("Telemetry Platform - Database Setup")
     print("=" * 70)
@@ -56,7 +67,7 @@ def main() -> int:
 
     # Step 1: Determine database path
     print("[1/4] Determining database location...")
-    db_path = get_database_path()
+    db_path = args.db_path or get_database_path()
     print(f"      Selected: {db_path}")
     print()
 

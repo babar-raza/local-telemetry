@@ -7,6 +7,7 @@ import pandas as pd
 import requests
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timedelta
+from telemetry.status import CANONICAL_STATUSES, normalize_status
 
 # Configuration
 API_BASE_URL = os.environ.get("TELEMETRY_API_URL", "http://localhost:8765")
@@ -32,7 +33,11 @@ class TelemetryAPIClient:
     def get_runs(
         self,
         agent_name: Optional[str] = None,
-        status: Optional[str] = None,
+        status: Optional[List[str]] = None,
+        job_type: Optional[str] = None,
+        run_id_contains: Optional[str] = None,
+        parent_run_id: Optional[str] = None,
+        exclude_job_type: Optional[str] = None,
         created_before: Optional[str] = None,
         created_after: Optional[str] = None,
         limit: int = 100,
@@ -47,6 +52,14 @@ class TelemetryAPIClient:
             params["agent_name"] = agent_name
         if status:
             params["status"] = status
+        if job_type:
+            params["job_type"] = job_type
+        if run_id_contains:
+            params["run_id_contains"] = run_id_contains
+        if parent_run_id:
+            params["parent_run_id"] = parent_run_id
+        if exclude_job_type:
+            params["exclude_job_type"] = exclude_job_type
         if created_before:
             params["created_before"] = created_before
         if created_after:
@@ -100,7 +113,11 @@ def truncate_text(text: Optional[str], max_length: int = 50) -> str:
 
 def validate_status(status: str) -> bool:
     """Validate status enum."""
+<<<<<<< Updated upstream
     return status in ["running", "success", "failed", "partial", "timeout", "cancelled"]
+=======
+    return normalize_status(status) in CANONICAL_STATUSES
+>>>>>>> Stashed changes
 
 # ============================================================================
 # Page Configuration
@@ -146,6 +163,19 @@ with st.sidebar:
 
     available_agents, available_job_types = get_filter_options()
 
+    def reset_filters():
+        """Reset filter widgets and selection state."""
+        st.session_state["filter_agent"] = "All"
+        st.session_state["filter_status"] = []
+        st.session_state["filter_date_from"] = None
+        st.session_state["filter_date_to"] = None
+        st.session_state["filter_job_type"] = "All"
+        st.session_state["exclude_test"] = True
+        st.session_state["filter_run_id_contains"] = ""
+        st.session_state["filter_parent_run_id"] = ""
+        st.session_state.pop("selected_event_id", None)
+        st.session_state.pop("edit_form_data", None)
+
     # Filters
     st.subheader("Filters")
 
@@ -165,7 +195,8 @@ with st.sidebar:
         "Agent Name",
         options=["All"] + available_agents,
         index=0,
-        help="Select agent to filter"
+        help="Select agent to filter",
+        key="filter_agent"
     )
 
     # Convert "All" to None for API query
@@ -175,8 +206,14 @@ with st.sidebar:
     # Status filter
     filter_status = st.multiselect(
         "Status",
+<<<<<<< Updated upstream
         options=["running", "success", "failed", "partial", "timeout", "cancelled"],
         help="Select one or more statuses"
+=======
+        options=CANONICAL_STATUSES,
+        help="Select one or more statuses",
+        key="filter_status"
+>>>>>>> Stashed changes
     )
 
     # Date range filter
@@ -186,13 +223,15 @@ with st.sidebar:
         filter_date_from = st.date_input(
             "From",
             value=None,
-            help="Start date (inclusive)"
+            help="Start date (inclusive)",
+            key="filter_date_from"
         )
     with col2:
         filter_date_to = st.date_input(
             "To",
             value=None,
-            help="End date (inclusive)"
+            help="End date (inclusive)",
+            key="filter_date_to"
         )
 
     # Job type filter (dropdown with auto-populated values)
@@ -200,7 +239,8 @@ with st.sidebar:
         "Job Type",
         options=["All"] + available_job_types,
         index=0,
-        help="Select job type to filter"
+        help="Select job type to filter",
+        key="filter_job_type"
     )
 
     # Convert "All" to None for filtering
@@ -211,8 +251,23 @@ with st.sidebar:
     exclude_test = st.checkbox(
         "Exclude test data (job_type='test')",
         value=True,
-        help="Filter out test entries"
+        help="Filter out test entries",
+        key="exclude_test"
     )
+
+    with st.expander("Advanced Filters"):
+        filter_run_id_contains = st.text_input(
+            "Run ID contains",
+            value="",
+            help="Substring match for run_id",
+            key="filter_run_id_contains"
+        )
+        filter_parent_run_id = st.text_input(
+            "Parent Run ID",
+            value="",
+            help="Exact parent_run_id match",
+            key="filter_parent_run_id"
+        )
 
     st.divider()
 
@@ -225,7 +280,7 @@ with st.sidebar:
 
     # Actions
     refresh_button = st.button("🔄 Refresh Data", width='stretch')
-    clear_filters = st.button("🗑️ Clear Filters", width='stretch')
+    clear_filters = st.button("🗑️ Clear Filters", width='stretch', on_click=reset_filters)
 
 # ============================================================================
 # Main Content - Tabs
@@ -246,8 +301,6 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs([
 with tab1:
     st.header("Browse Agent Runs")
 
-    if clear_filters:
-        st.rerun()
 
     try:
         # Build query parameters
@@ -272,13 +325,32 @@ with tab1:
             end_date = filter_date_to + timedelta(days=1)
             query_params["created_before"] = end_date.isoformat()
 
+<<<<<<< Updated upstream
         # Fetch data
+=======
+        if filter_status:
+            query_params["status"] = filter_status
+
+        if filter_job_type:
+            query_params["job_type"] = filter_job_type
+        elif exclude_test:
+            query_params["exclude_job_type"] = "test"
+
+        if filter_run_id_contains:
+            query_params["run_id_contains"] = filter_run_id_contains
+
+        if filter_parent_run_id:
+            query_params["parent_run_id"] = filter_parent_run_id
+
+        # Fetch data with server-side filtering
+>>>>>>> Stashed changes
         with st.spinner("Loading data..."):
             runs = client.get_runs(**query_params)
 
         if not runs:
             st.info("No runs found matching the filters.")
         else:
+<<<<<<< Updated upstream
             # Filter out test data if requested
             if exclude_test:
                 runs = [r for r in runs if r.get("job_type") != "test"]
@@ -287,15 +359,19 @@ with tab1:
             if filter_job_type:
                 runs = [r for r in runs if r.get("job_type") == filter_job_type]
 
+=======
+>>>>>>> Stashed changes
             # Display count
             st.success(f"Found {len(runs)} run(s)")
 
             # Convert to DataFrame for display
             df_data = []
             for run in runs:
+                run_id_full = run.get("run_id", "")
                 df_data.append({
                     "event_id": run.get("event_id"),
-                    "run_id": run.get("run_id", "")[:8],  # Short format
+                    "run_id": run_id_full,
+                    "run_id_short": run_id_full[:8],
                     "agent_name": run.get("agent_name"),
                     "job_type": run.get("job_type"),
                     "status": run.get("status"),
@@ -315,22 +391,26 @@ with tab1:
 
             # Display dataframe
             st.dataframe(
-                df.drop(columns=["event_id"]),  # Hide event_id
+                df.drop(columns=["event_id", "run_id"]),  # Hide ids used for selection
                 width='stretch',
                 height=600
             )
 
             # Selection for editing
             st.subheader("Quick Actions")
-            selected_run_id = st.selectbox(
+            selection_options = df["event_id"].tolist()
+            selection_labels = {
+                row["event_id"]: f"{row['run_id_short']} | {row['agent_name']} | {row['status']}"
+                for _, row in df.iterrows()
+            }
+            selected_event_id = st.selectbox(
                 "Select run to edit",
-                options=df["run_id"].tolist(),
+                options=selection_options,
+                format_func=lambda eid: selection_labels.get(eid, eid),
                 help="Select a run to edit in the 'Edit Single Run' tab"
             )
 
-            if selected_run_id:
-                # Find the event_id for the selected run_id
-                selected_event_id = df[df["run_id"] == selected_run_id]["event_id"].iloc[0]
+            if selected_event_id:
                 st.session_state.selected_event_id = selected_event_id
                 st.info(f"Selected event_id: {selected_event_id}")
                 st.info("Switch to the 'Edit Single Run' tab to modify this record.")
@@ -863,7 +943,7 @@ with tab4:
                 labels={"count": "Number of Runs", "agent_name": "Agent Name"},
                 color_discrete_map={
                     "success": "#28a745",
-                    "failed": "#dc3545",
+                    "failure": "#dc3545",
                     "running": "#ffc107",
                     "partial": "#fd7e14",
                     "timeout": "#6c757d",
@@ -1183,7 +1263,7 @@ with tab5:
                     "Value": [
                         len(df_to_export),
                         len(df_to_export[df_to_export["status"] == "success"]),
-                        len(df_to_export[df_to_export["status"] == "failed"]),
+                        len(df_to_export[df_to_export["status"] == "failure"]),
                         f"{(len(df_to_export[df_to_export['status'] == 'success']) / len(df_to_export) * 100):.2f}" if len(df_to_export) > 0 else "0",
                         df_to_export["items_discovered"].sum() if "items_discovered" in df_to_export.columns else 0,
                         df_to_export["items_succeeded"].sum() if "items_succeeded" in df_to_export.columns else 0,

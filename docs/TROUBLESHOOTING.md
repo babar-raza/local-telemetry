@@ -1,5 +1,193 @@
 # Troubleshooting Guide - Local Telemetry Platform
 
+## Table of Contents
+
+- [Client Configuration Issues](#client-configuration-issues)
+- [Database and PRAGMA Settings](#database-and-pragma-settings)
+- [Query Performance](#query-performance-optimization-v210)
+- [When to Run Diagnostic Scripts](#when-to-run-diagnostic-scripts)
+
+---
+
+## Client Configuration Issues
+
+### Issue: 404 Errors in Logs
+
+**Symptom:**
+
+You see repeated 404 errors in the telemetry API logs:
+
+```
+POST / HTTP/1.1" 404
+POST / HTTP/1.1" 404
+POST / HTTP/1.1" 404
+POST / HTTP/1.1" 404
+```
+
+**Cause:**
+
+Google Sheets client (`APIClient`) is enabled but `GOOGLE_SHEETS_API_URL` is set to `http://localhost:8765` instead of a valid Google Sheets endpoint. The APIClient posts to the base URL (`/`) which doesn't have a handler, causing 404 errors.
+
+**Solution:**
+
+**Option A: Disable Google Sheets (Recommended)**
+
+```bash
+# Edit .env file
+GOOGLE_SHEETS_API_ENABLED=false
+
+# Restart service
+docker-compose restart telemetry-api
+
+# Verify no more 404 errors
+docker-compose logs telemetry-api --tail 20 | grep "404"
+# Expected output: (empty)
+```
+
+**Option B: Fix Google Sheets URL**
+
+```bash
+# Edit .env file
+GOOGLE_SHEETS_API_URL=https://sheets.googleapis.com/v4/spreadsheets/YOUR_SHEET_ID/values/Sheet1!A1:append
+GOOGLE_SHEETS_API_ENABLED=true
+METRICS_API_TOKEN=your_google_sheets_api_token
+
+# Restart service
+docker-compose restart telemetry-api
+```
+
+**See Also:** [TELEMETRY_CLIENTS.md - Common Mistakes](TELEMETRY_CLIENTS.md#common-mistakes)
+
+---
+
+### Issue: Configuration Validation Error
+
+**Symptom:**
+
+```
+ValueError: GOOGLE_SHEETS_API_URL is required when GOOGLE_SHEETS_API_ENABLED=true
+```
+
+**Cause:**
+
+Google Sheets export is enabled but the URL is not configured.
+
+**Solution:**
+
+```bash
+# Option A: Disable Google Sheets
+GOOGLE_SHEETS_API_ENABLED=false
+
+# Option B: Configure Google Sheets URL
+GOOGLE_SHEETS_API_URL=https://sheets.googleapis.com/v4/spreadsheets/YOUR_SHEET_ID/values/Sheet1!A1:append
+GOOGLE_SHEETS_API_ENABLED=true
+```
+
+**Verify configuration:**
+
+```bash
+python -c "
+from src.telemetry.config import TelemetryConfig
+cfg = TelemetryConfig.from_env()
+is_valid, errors = cfg.validate()
+print(f'Valid: {is_valid}')
+if errors:
+    for error in errors:
+        print(f'  - {error}')
+"
+```
+
+**See Also:** [CONFIGURATION.md](CONFIGURATION.md), [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)
+
+---
+
+### Issue: No Telemetry Data
+
+**Symptom:**
+
+Events are not appearing in the database. Queries return empty results.
+
+**Diagnostic Steps:**
+
+```bash
+# 1. Check service is running
+docker ps | grep telemetry
+
+# 2. Check health endpoint
+curl http://localhost:8765/health
+
+# 3. Check logs for errors
+docker-compose logs telemetry-api --tail 50
+
+# 4. Test POST directly
+curl -X POST http://localhost:8765/api/v1/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "event_id": "test-diag-001",
+    "run_id": "test-run-001",
+    "agent_name": "diagnostic-test",
+    "job_type": "test",
+    "trigger_type": "manual",
+    "start_time": "2025-01-09T12:00:00Z",
+    "status": "success",
+    "schema_version": 6,
+    "duration_ms": 0,
+    "created_at": "2025-01-09T12:00:00Z",
+    "updated_at": "2025-01-09T12:00:00Z"
+  }'
+
+# 5. Query to verify
+curl http://localhost:8765/api/v1/runs?agent_name=diagnostic-test
+
+# 6. Check database directly
+docker exec local-telemetry-api sqlite3 /data/telemetry.sqlite \
+  "SELECT COUNT(*) FROM agent_runs;"
+```
+
+**See Also:** [TELEMETRY_CLIENTS.md - Troubleshooting](TELEMETRY_CLIENTS.md#troubleshooting)
+
+---
+
+### Issue: Multiple Retry Attempts
+
+**Symptom:**
+
+Logs show same event being retried multiple times:
+
+```
+[WARNING] API error 503 (retryable), attempt 1/3, retrying in 1s
+[WARNING] API error 503 (retryable), attempt 2/3, retrying in 2s
+[ERROR] API error 503 failed after 3 attempts
+```
+
+**Cause:**
+
+Transient network or server error triggering retry logic.
+
+**Understanding Retry Logic:**
+
+- **4xx errors**: Client errors, NOT retried
+- **5xx errors**: Server errors, ARE retried
+- **Connection/timeout errors**: ARE retried
+
+**Solution for Persistent Errors:**
+
+```bash
+# Check service health
+docker-compose logs telemetry-api --tail 50
+
+# Restart service if needed
+docker-compose restart telemetry-api
+
+# Check for database locks
+docker exec local-telemetry-api sqlite3 /data/telemetry.sqlite \
+  "PRAGMA busy_timeout; PRAGMA journal_mode;"
+```
+
+---
+
+## Database and PRAGMA Settings
+
 ## When to Run Diagnostic Scripts
 
 This platform includes several diagnostic scripts to help identify and resolve issues. Here's when to use each:

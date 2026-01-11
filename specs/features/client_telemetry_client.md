@@ -3,7 +3,7 @@
 **Feature ID:** `client.TelemetryClient`
 **Category:** Python Client API
 **Status:** VERIFIED (evidence-backed)
-**Last Updated:** 2025-12-26
+**Last Updated:** 2026-01-01
 
 ---
 
@@ -16,6 +16,7 @@
 2. **Guaranteed delivery** - HTTP API primary, buffer failover, NDJSON backup
 3. **Zero-configuration** - Loads config from environment, auto-detects paths
 4. **Fire-and-forget** - External API posting (Google Sheets) is async and silent
+5. **Custom run_id support** - Optional custom run IDs with validation and duplicate detection (v2.1.0+)
 
 ---
 
@@ -66,6 +67,143 @@ def __init__(self, config: Optional[TelemetryConfig] = None)
 
 ---
 
+## RunIDMetrics Class
+
+**Purpose**: In-memory metrics for tracking custom run_id usage, validation rejections, and duplicate detection.
+
+**File Location:** `src/telemetry/client.py:39-150`
+
+### Thread Safety
+
+RunIDMetrics uses `threading.Lock` for thread-safe concurrent access to counters.
+
+**Evidence:** `src/telemetry/client.py:53`
+
+### Counters
+
+**Run ID Source Counters:**
+- `custom_accepted` (int): Custom run_ids that passed validation
+- `generated` (int): Auto-generated run_ids used
+
+**Validation Rejection Counters:**
+- `rejected_empty` (int): Rejected because empty or whitespace-only
+- `rejected_too_long` (int): Rejected because > 255 characters
+- `rejected_invalid_chars` (int): Rejected because path separators or null bytes
+
+**Duplicate Detection:**
+- `duplicates_detected` (int): Duplicate run_ids found in active registry
+
+**Evidence:** `src/telemetry/client.py:55-66`
+
+### Methods
+
+**get_snapshot() -> Dict[str, Any]:**
+Returns thread-safe snapshot of current metrics with calculated totals and percentages.
+
+**Return Value:**
+```python
+{
+    "run_id_metrics": {
+        "custom_accepted": int,
+        "generated": int,
+        "rejected": {
+            "empty": int,
+            "too_long": int,
+            "invalid_chars": int,
+            "total": int,
+        },
+        "duplicates_detected": int,
+        "total_runs": int,
+        "custom_percentage": float,
+    },
+    "timestamp": str  # ISO8601
+}
+```
+
+**Evidence:** `src/telemetry/client.py:97-132`
+
+**to_json() -> str:**
+Returns metrics snapshot as formatted JSON string.
+
+**Evidence:** `src/telemetry/client.py:134-141`
+
+**log_metrics():**
+Logs current metrics to logger as structured JSON.
+
+**Evidence:** `src/telemetry/client.py:143-149`
+
+---
+
+## Custom Run ID Validation Rules
+
+**Constant:** `MAX_RUN_ID_LENGTH = 255`
+
+**Evidence:** `src/telemetry/client.py:20`
+
+**Validation Function:** `_validate_custom_run_id(run_id: str) -> tuple[bool, Optional[str]]`
+
+**Rules Enforced:**
+
+1. **Not Empty**: run_id must not be empty or whitespace-only
+   - Rejection reason: `"empty"`
+   - Evidence: `src/telemetry/client.py:436-441`
+
+2. **Length Limit**: run_id must be <= 255 characters
+   - Rejection reason: `"too_long"`
+   - Evidence: `src/telemetry/client.py:443-448`
+
+3. **No Path Separators**: run_id must not contain `/` or `\`
+   - Security: Prevents directory traversal attacks
+   - Rejection reason: `"invalid_chars"`
+   - Evidence: `src/telemetry/client.py:450-456`
+
+4. **No Null Bytes**: run_id must not contain `\x00`
+   - Security: Prevents string termination attacks
+   - Rejection reason: `"invalid_chars"`
+   - Evidence: `src/telemetry/client.py:450-456`
+
+**Return Values:**
+- `(True, None)`: run_id is valid
+- `(False, "empty")`: run_id is empty or whitespace
+- `(False, "too_long")`: run_id exceeds 255 characters
+- `(False, "invalid_chars")`: run_id contains path separators or null bytes
+
+**Side Effects:**
+- Increments appropriate rejection counter in run_id_metrics
+- Never crashes (metrics updates wrapped in try/except)
+
+**Evidence:** `src/telemetry/client.py:416-458`
+
+**Reference:** See `docs/schema_constraints.md` for full constraint documentation
+
+---
+
+## Duplicate Run ID Detection
+
+**Behavior:** start_run() checks for duplicate run_id in `_active_runs` registry before creating new run.
+
+**Duplicate Handling:**
+
+**For Custom run_ids:**
+1. Log error: `"Custom run_id '{custom_run_id}' is already active"`
+2. Append suffix: `"{custom_run_id}-duplicate-{uuid8}"`
+3. Return modified run_id
+4. Increment duplicates_detected counter
+5. Evidence: `src/telemetry/client.py:529-539`
+
+**For Generated run_ids:**
+1. Log info: `"Regenerating run_id to avoid duplicate"`
+2. Generate new run_id with fresh UUID
+3. Return new run_id
+4. Increment duplicates_detected counter
+5. Evidence: `src/telemetry/client.py:541-544`
+
+**Rationale:** Prevents database UNIQUE constraint violations while preserving custom run_id intent.
+
+**Evidence:** `src/telemetry/client.py:520-544`
+
+---
+
 ### Method: start_run
 
 **Signature:**
@@ -84,24 +222,42 @@ def start_run(
 - `trigger_type` (str, optional): How run was triggered
   - Default: "cli"
   - Options: "cli", "web", "scheduler", "mcp", "manual"
-- `**kwargs`: Additional fields (insight_id, product, platform, agent_owner, etc.)
+- `**kwargs`: Additional fields (insight_id, product, platform, agent_owner, run_id, etc.)
+  - **run_id** (str, optional): Custom run ID to use instead of auto-generated
+    - If provided, will be validated (see Validation Rules below)
+    - If validation fails, falls back to auto-generated run_id
+    - Evidence: `src/telemetry/client.py:474-484`
 
 **Returns:**
 - `str`: Unique run_id
-  - Format: `{YYYYMMDD}T{HHMMSS}Z-{agent_name}-{uuid8}`
-  - Example: `"20251210T120530Z-hugo-translator-a1b2c3d4"`
+  - Format (auto-generated): `{YYYYMMDD}T{HHMMSS}Z-{agent_name}-{uuid8}`
+  - Example (auto-generated): `"20251210T120530Z-hugo-translator-a1b2c3d4"`
+  - Format (custom): Any string meeting validation rules
+  - Example (custom): `"custom-id-123"`, `"project-alpha-run-001"`
 
 **Side Effects:**
-1. Generates run_id via `generate_run_id(agent_name)`
-2. Creates `RunRecord` with status="running"
-3. Stores record in `_active_runs` registry
-4. Writes to HTTP API (primary)
+1. Extracts custom run_id from kwargs if provided
+2. Validates custom run_id (if provided):
+   - Checks length <= 255 characters (MAX_RUN_ID_LENGTH)
+   - Rejects empty or whitespace-only strings
+   - Rejects path separators (/, \) and null bytes
+   - Updates run_id_metrics counters
+   - Falls back to generated run_id if validation fails
+   - Evidence: `src/telemetry/client.py:486-518`
+3. Checks for duplicate run_id in active runs registry:
+   - If duplicate custom run_id: appends suffix (e.g., "-duplicate-a1b2c3d4")
+   - If duplicate generated run_id: regenerates with new UUID
+   - Updates duplicates_detected counter
+   - Evidence: `src/telemetry/client.py:520-544`
+4. Creates `RunRecord` with status="running"
+5. Stores record in `_active_runs` registry
+6. Writes to HTTP API (primary)
    - On success: Event posted to database
    - On APIUnavailableError: Falls back to buffer
    - On unexpected error: Falls back to buffer
-5. Writes to NDJSON backup (always attempted)
+7. Writes to NDJSON backup (always attempted)
 
-**Evidence:** `src/telemetry/client.py:223-276`
+**Evidence:** `src/telemetry/client.py:460-574`
 
 **Error Handling:**
 - **NEVER raises exceptions**
@@ -202,12 +358,14 @@ def track_run(
 ```
 
 **Parameters:**
-- Same as `start_run()`
+- Same as `start_run()`, including support for custom `run_id` in kwargs
+- All validation rules and behaviors from `start_run()` apply
 
 **Yields:**
 - `RunContext`: Context object with methods:
   - `log_event(event_type, payload)`
   - `set_metrics(**kwargs)`
+  - `run_id` attribute contains the actual run_id (custom or generated)
 
 **Behavior:**
 1. **On Entry:**
@@ -222,6 +380,8 @@ def track_run(
 **Evidence:** `src/telemetry/client.py:378-433`
 
 **Example Usage:**
+
+**Basic (auto-generated run_id):**
 ```python
 with client.track_run("my_agent", "process") as ctx:
     ctx.log_event("start", {"input": "data.csv"})
@@ -230,9 +390,110 @@ with client.track_run("my_agent", "process") as ctx:
 # Auto-ends with status="success"
 ```
 
+**With Custom run_id:**
+```python
+with client.track_run(
+    agent_name="my_agent",
+    job_type="process",
+    run_id="custom-run-001"
+) as ctx:
+    print(f"Using run_id: {ctx.run_id}")  # "custom-run-001" if valid
+    ctx.log_event("checkpoint", {"step": 1})
+    ctx.set_metrics(items_discovered=100, items_succeeded=98)
+# Auto-ends with status="success"
+```
+
+**Evidence:** `tests/test_integration_custom_run_id.py:296-316`
+
 **Error Handling:**
 - Exception during run: Logged and re-raised
 - Evidence: `src/telemetry/client.py:421-432`
+
+---
+
+### Method: get_run_id_metrics
+
+**Signature:**
+```python
+def get_run_id_metrics() -> Dict[str, Any]
+```
+
+**Parameters:** None
+
+**Returns:**
+```python
+{
+    "run_id_metrics": {
+        "custom_accepted": int,
+        "generated": int,
+        "rejected": {
+            "empty": int,
+            "too_long": int,
+            "invalid_chars": int,
+            "total": int,
+        },
+        "duplicates_detected": int,
+        "total_runs": int,
+        "custom_percentage": float,
+    },
+    "timestamp": str  # ISO8601
+}
+```
+
+**Side Effects:**
+- Calls `run_id_metrics.get_snapshot()` for thread-safe snapshot
+- On error: Returns `{"error": "...", "timestamp": "..."}`
+
+**Evidence:** `src/telemetry/client.py:733-753`
+
+**Error Handling:**
+- Never raises exceptions
+- Returns error dict on failure
+
+**Example:**
+```python
+metrics = client.get_run_id_metrics()
+print(f"Custom IDs: {metrics['run_id_metrics']['custom_accepted']}")
+print(f"Generated IDs: {metrics['run_id_metrics']['generated']}")
+print(f"Total rejected: {metrics['run_id_metrics']['rejected']['total']}")
+```
+
+---
+
+### Method: log_run_id_metrics
+
+**Signature:**
+```python
+def log_run_id_metrics()
+```
+
+**Parameters:** None
+
+**Returns:** None
+
+**Side Effects:**
+- Logs run_id metrics to logger as structured JSON
+- Uses INFO level logging
+
+**Evidence:** `src/telemetry/client.py:755-767`
+
+**Error Handling:**
+- Never raises exceptions
+- Logs warning on failure
+
+**Example:**
+```python
+client.log_run_id_metrics()
+# Output to logger:
+# INFO: Run ID Metrics:
+# {
+#   "run_id_metrics": {
+#     "custom_accepted": 5,
+#     "generated": 10,
+#     ...
+#   }
+# }
+```
 
 ---
 
@@ -251,15 +512,25 @@ def get_stats() -> Dict[str, Any]
     "total_runs": int,
     "agents": dict,  # {agent_name: count}
     "recent_24h": int,
+    "run_id_metrics": {  # Added in v2.1.0
+        "custom_accepted": int,
+        "generated": int,
+        "rejected": {...},
+        "duplicates_detected": int,
+        "total_runs": int,
+        "custom_percentage": float,
+    },
+    "timestamp": str  # ISO8601
 }
 ```
 
 **Side Effects:**
 1. Tries HTTP API `GET /metrics` first
 2. On failure, falls back to `database_writer.get_run_stats()`
-3. On all failures, returns `{"error": "Statistics unavailable"}`
+3. Merges run_id_metrics snapshot into stats dict
+4. On all failures, returns `{"error": "Statistics unavailable"}`
 
-**Evidence:** `src/telemetry/client.py:434-464`
+**Evidence:** `src/telemetry/client.py:769-810` (includes run_id_metrics merge at lines 803-808)
 
 **Error Handling:**
 - HTTP API errors logged as debug
@@ -303,6 +574,154 @@ def associate_commit(
 - **NEVER raises exceptions**
 - On error: Returns `(False, "[ERROR] associate_commit failed: {e}")`
 - If database unavailable: Returns `(False, "[ERROR] Commit association not available")`
+
+---
+
+## Custom Run ID Usage Examples
+
+### Example 1: Basic Custom Run ID
+
+**Use Case:** Provide deterministic run_id for testing or correlation.
+
+```python
+from telemetry import TelemetryClient
+
+client = TelemetryClient()
+
+# Start run with custom ID
+run_id = client.start_run(
+    agent_name="my-agent",
+    job_type="process-files",
+    run_id="project-alpha-run-001"
+)
+
+print(f"Run ID: {run_id}")  # "project-alpha-run-001"
+
+# ... do work ...
+
+client.end_run(run_id, status="success", items_succeeded=10)
+```
+
+**Evidence:** `tests/test_integration_custom_run_id.py:204-217`
+
+---
+
+### Example 2: Custom Run ID with Validation Handling
+
+**Use Case:** Handle validation failures gracefully.
+
+```python
+from telemetry import TelemetryClient
+
+client = TelemetryClient()
+
+# Attempt with invalid run_id (too long)
+run_id = client.start_run(
+    agent_name="my-agent",
+    job_type="test",
+    run_id="a" * 300  # Exceeds MAX_RUN_ID_LENGTH (255)
+)
+
+# Client automatically falls back to generated run_id
+print(f"Run ID: {run_id}")  # Will be auto-generated, NOT "aaa..."
+assert run_id != "a" * 300
+
+client.end_run(run_id, status="success")
+```
+
+**Evidence:** `tests/test_integration_custom_run_id.py:368-399`
+
+---
+
+### Example 3: Valid Special Characters
+
+**Use Case:** Use hyphens, underscores, dots in custom run_id.
+
+```python
+from telemetry import TelemetryClient
+
+client = TelemetryClient()
+
+# These are all valid custom run_ids
+valid_ids = [
+    "test-run-with-hyphens",
+    "test_run_with_underscores",
+    "test.run.with.dots",
+    "test-run_mixed.123",
+]
+
+for custom_id in valid_ids:
+    run_id = client.start_run(
+        agent_name="my-agent",
+        job_type="test",
+        run_id=custom_id
+    )
+    assert run_id == custom_id  # Custom ID preserved
+    client.end_run(run_id, status="success")
+```
+
+**Evidence:** `tests/test_integration_custom_run_id.py:447-468`
+
+---
+
+### Example 4: Retrieve Run ID Metrics
+
+**Use Case:** Monitor custom run_id usage and validation rejections.
+
+```python
+from telemetry import TelemetryClient
+
+client = TelemetryClient()
+
+# Perform several runs with custom and generated IDs
+client.start_run("agent1", "job1", run_id="custom-001")
+client.start_run("agent2", "job2")  # Auto-generated
+client.start_run("agent3", "job3", run_id="")  # Empty - will be rejected
+
+# Get metrics
+metrics = client.get_run_id_metrics()
+
+print(f"Custom accepted: {metrics['run_id_metrics']['custom_accepted']}")  # 1
+print(f"Generated: {metrics['run_id_metrics']['generated']}")  # 2 (1 auto + 1 fallback)
+print(f"Rejected (empty): {metrics['run_id_metrics']['rejected']['empty']}")  # 1
+print(f"Custom percentage: {metrics['run_id_metrics']['custom_percentage']}%")
+
+# Or log metrics to logger
+client.log_run_id_metrics()
+```
+
+**Evidence:** `src/telemetry/client.py:733-767`
+
+---
+
+### Example 5: Concurrent Runs with Different Custom IDs
+
+**Use Case:** Track multiple simultaneous runs with distinct identifiers.
+
+```python
+from telemetry import TelemetryClient
+
+client = TelemetryClient()
+
+# Start multiple runs with different custom IDs
+run_ids = []
+for i in range(3):
+    run_id = client.start_run(
+        agent_name="worker",
+        job_type="concurrent",
+        run_id=f"batch-2024-{i:03d}"
+    )
+    run_ids.append(run_id)
+
+# All custom IDs are preserved
+assert run_ids == ["batch-2024-000", "batch-2024-001", "batch-2024-002"]
+
+# End all runs
+for run_id in run_ids:
+    client.end_run(run_id, status="success")
+```
+
+**Evidence:** `tests/test_integration_custom_run_id.py:401-438`
 
 ---
 

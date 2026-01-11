@@ -28,21 +28,17 @@ Query telemetry runs with filtering, pagination, and sorting support. This endpo
 ```python
 @app.get("/api/v1/runs")
 async def query_runs(
-    request: Request,
-    agent_name: Optional[str] = None,
-    status: Optional[str] = None,
-    job_type: Optional[str] = None,
-    created_before: Optional[str] = None,
-    created_after: Optional[str] = None,
-    start_time_from: Optional[str] = None,
-    start_time_to: Optional[str] = None,
-    limit: int = Query(default=100, le=1000, ge=1),
-    offset: int = Query(default=0, ge=0),
-    _rate_limit: None = Depends(check_rate_limit)
+    agent_name: Optional[str] = Query(None, description="Filter by agent name"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    job_type: Optional[str] = Query(None, description="Filter by job type"),
+    limit: int = Query(100, ge=1, le=1000, description="Max results"),
+    offset: int = Query(0, ge=0, description="Result offset"),
 )
 ```
 
-**Evidence:** `telemetry_service.py:598-610`
+**Evidence:** `telemetry_service.py:540-546`
+
+**NOTE:** Date/time filters (created_before, created_after, start_time_from, start_time_to) are NOT YET IMPLEMENTED in v1.0.0.
 
 ### Handler Function
 **File:** `telemetry_service.py:598-763`
@@ -71,28 +67,37 @@ GET /api/v1/runs?agent_name=hugo-translator&status=running&created_before=2025-1
 
 | Parameter | Type | Validation | Description | Evidence |
 |-----------|------|------------|-------------|----------|
-| `agent_name` | str | None | Exact match on agent_name | Line 601 |
-| `status` | str | Allowed values only | Filter by status | Line 602 |
-| `job_type` | str | None | Exact match on job_type | Line 603 |
-| `created_before` | str | ISO8601 timestamp | Runs created before this time | Line 604 |
-| `created_after` | str | ISO8601 timestamp | Runs created after this time | Line 605 |
-| `start_time_from` | str | ISO8601 timestamp | Runs started after this time | Line 606 |
-| `start_time_to` | str | ISO8601 timestamp | Runs started before this time | Line 607 |
+| `agent_name` | str | None | Exact match on agent_name | Line 541 |
+| `status` | str | Normalized to canonical | Filter by status (supports aliases) | Line 542, 553 |
+| `job_type` | str | None | Exact match on job_type | Line 543 |
+
+**Status Alias Normalization:**
+- Input: `failed` → Filters for: `failure`
+- Input: `completed` → Filters for: `success`
+- Input: `succeeded` → Filters for: `success`
+- Canonical values returned in results (telemetry_service.py:37-69)
+
+**NOT YET IMPLEMENTED:**
+- Date/time filters (created_before, created_after, start_time_from, start_time_to)
+- Multi-status filtering (status array or repeated params)
+- parent_run_id filtering
+- run_id_contains search
+- exclude_job_type filtering
 
 #### Pagination Parameters
 
 | Parameter | Type | Default | Constraints | Description | Evidence |
 |-----------|------|---------|-------------|-------------|----------|
-| `limit` | int | 100 | 1-1000 | Max results to return | Line 608 |
-| `offset` | int | 0 | >= 0 | Pagination offset | Line 609 |
+| `limit` | int | 100 | 1-1000 | Max results to return | Line 544 |
+| `offset` | int | 0 | >= 0 | Pagination offset | Line 545 |
 
-**Evidence:** `telemetry_service.py:598-610`
+**Evidence:** `telemetry_service.py:540-546`
 
 ---
 
-### Status Validation
+### Status Validation and Normalization
 
-**Allowed Values:**
+**Canonical Statuses (stored in database):**
 - `"running"`
 - `"success"`
 - `"failure"`
@@ -100,47 +105,34 @@ GET /api/v1/runs?agent_name=hugo-translator&status=running&created_before=2025-1
 - `"timeout"`
 - `"cancelled"`
 
-**Validation Logic:**
+**Status Aliases (accepted as input, normalized to canonical):**
+- `"failed"` → `"failure"`
+- `"completed"` → `"success"`
+- `"succeeded"` → `"success"`
+
+**Normalization Logic:**
 ```python
-if status:
-    allowed_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
-    if status not in allowed_statuses:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid status. Must be one of: {allowed_statuses}"
-        )
+def normalize_status(status: Optional[str]) -> Optional[str]:
+    if status is None:
+        return None
+    if status in CANONICAL_STATUSES:
+        return status
+    return STATUS_ALIASES.get(status, status)
+
+# Applied in query:
+canonical_status = normalize_status(status) if status else None
+if canonical_status:
+    query += " AND status = ?"
+    params.append(canonical_status)
 ```
 
-**Evidence:** `telemetry_service.py:634-641`
+**Evidence:** `telemetry_service.py:46-69` (normalization function), `telemetry_service.py:553` (applied in query)
 
----
-
-### Timestamp Validation
-
-**Format:** ISO8601 with timezone
-**Examples:**
-- `2025-12-26T12:00:00Z`
-- `2025-12-26T12:00:00+00:00`
-- `2025-12-26T12:00:00.123456+00:00`
-
-**Validation Logic:**
-```python
-try:
-    datetime.fromisoformat(ts_value.replace('Z', '+00:00'))
-except (ValueError, AttributeError):
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Invalid ISO8601 timestamp for {ts_name}: '{ts_value}'"
-    )
-```
-
-**Evidence:** `telemetry_service.py:644-659`
-
-**Validated Fields:**
-- `created_before`
-- `created_after`
-- `start_time_from`
-- `start_time_to`
+**Behavior:**
+- Query param `?status=failed` → Filters for `status='failure'` in database
+- Query param `?status=completed` → Filters for `status='success'` in database
+- Query param `?status=running` → Filters for `status='running'` (already canonical)
+- Results always return canonical statuses
 
 ---
 
@@ -159,27 +151,29 @@ except (ValueError, AttributeError):
     "run_id": "20251226T120000Z-hugo-translator-a1b2c3d4",
     "agent_name": "hugo-translator",
     "job_type": "translate_posts",
-    "status": "running",
+    "status": "success",
     "created_at": "2025-12-26T12:00:00.000000+00:00",
     "start_time": "2025-12-26T12:00:00.000000+00:00",
-    "end_time": null,
-    "duration_ms": 0,
+    "end_time": "2025-12-26T12:00:05.000000+00:00",
+    "duration_ms": 5000,
     "items_discovered": 10,
     "items_succeeded": 8,
     "items_failed": 2,
-    "metrics_json": {
-      "custom_metric": "value"
-    },
-    "context_json": {
-      "custom_context": "data"
-    },
+    "git_repo": "https://github.com/owner/repo",
+    "git_commit_hash": "abc123",
+    "commit_url": "https://github.com/owner/repo/commit/abc123",
+    "repo_url": "https://github.com/owner/repo",
     "api_posted": false,
     ...
   }
 ]
 ```
 
-**Evidence:** `telemetry_service.py:703-752`
+**Computed Fields (added in response):**
+- `commit_url` - GitHub/GitLab URL for commit (null if git data missing)
+- `repo_url` - Normalized repository URL (null if git_repo missing)
+
+**Evidence:** `telemetry_service.py:584-610`
 
 ---
 

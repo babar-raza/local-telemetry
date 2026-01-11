@@ -72,7 +72,7 @@ class TestErrorHandling:
         cursor.execute("SELECT status FROM agent_runs WHERE run_id = ?", (run_id_1,))
         status_1 = cursor.fetchone()
         assert status_1 is not None
-        assert status_1[0] == "failed"
+        assert status_1[0] == "failure"
 
         cursor.execute("SELECT status FROM agent_runs WHERE run_id = ?", (run_id_2,))
         status_2 = cursor.fetchone()
@@ -110,7 +110,7 @@ class TestErrorHandling:
             (run_id,)
         )
         row = cursor.fetchone()
-        assert row[0] == "failed"
+        assert row[0] == "failure"
         assert "Math error" in row[1] or "ValueError" in row[1]
         conn.close()
 

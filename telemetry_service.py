@@ -56,6 +56,12 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from telemetry.config import TelemetryAPIConfig
 from telemetry.single_writer_guard import SingleWriterGuard
 from telemetry.logger import log_query, log_update, log_error, track_duration
+<<<<<<< Updated upstream
+=======
+from telemetry.url_builder import build_commit_url, build_repo_url
+from telemetry.schema import ensure_schema as ensure_telemetry_schema
+from telemetry.status import CANONICAL_STATUSES, normalize_status, normalize_status_list
+>>>>>>> Stashed changes
 
 # Configure logging
 logging.basicConfig(
@@ -91,6 +97,14 @@ class TelemetryRun(BaseModel):
     agent_name: str
     job_type: str
     status: str = Field(default="running")
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def normalize_status_value(cls, v):
+        normalized = normalize_status(v)
+        if normalized not in CANONICAL_STATUSES:
+            raise ValueError(f"Status must be one of: {CANONICAL_STATUSES}")
+        return normalized
 
     # Product/Domain context
     product: Optional[str] = None
@@ -175,14 +189,15 @@ class RunUpdate(BaseModel):
     metrics_json: Optional[Dict[str, Any]] = None
     context_json: Optional[Dict[str, Any]] = None
 
-    @field_validator('status')
+    @field_validator('status', mode='before')
     @classmethod
-    def validate_status(cls, v):
-        if v is not None:
-            allowed = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
-            if v not in allowed:
-                raise ValueError(f"Status must be one of: {allowed}")
-        return v
+    def normalize_status_value(cls, v):
+        if v is None:
+            return None
+        normalized = normalize_status(v)
+        if normalized not in CANONICAL_STATUSES:
+            raise ValueError(f"Status must be one of: {CANONICAL_STATUSES}")
+        return normalized
 
     @field_validator('duration_ms', 'items_succeeded', 'items_failed', 'items_skipped')
     @classmethod
@@ -362,34 +377,17 @@ def get_db():
 
 
 def ensure_schema():
-    """Ensure database schema exists."""
-    with get_db() as conn:
-        # Check if schema_migrations table exists
-        cursor = conn.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='table' AND name='schema_migrations'
-        """)
-
-        if not cursor.fetchone():
-            logger.info("Database not initialized. Creating schema...")
-
-            # Read and execute schema file
-            schema_file = Path(__file__).parent / "schema" / "telemetry_v6.sql"
-
-            if not schema_file.exists():
-                logger.error(f"Schema file not found: {schema_file}")
-                raise FileNotFoundError(f"Schema file not found: {schema_file}")
-
-            with open(schema_file, 'r') as f:
-                schema_sql = f.read()
-
-            # Execute schema
-            conn.executescript(schema_sql)
-            conn.commit()
-
-            logger.info("[OK] Database schema created (v6)")
+    """Ensure database schema exists and self-heal drift."""
+    success, messages = ensure_telemetry_schema(TelemetryAPIConfig.DB_PATH)
+    for message in messages:
+        if message.startswith("[OK]"):
+            logger.info(message)
+        elif message.startswith("[WARN]"):
+            logger.warning(message)
         else:
-            logger.info("[OK] Database schema exists")
+            logger.error(message)
+    if not success:
+        raise RuntimeError("Database schema validation failed")
 
 
 # API endpoints
@@ -514,6 +512,22 @@ async def create_run(
         HTTPException: If validation fails or database error occurs
     """
     try:
+<<<<<<< Updated upstream
+=======
+        normalized_status = normalize_status(run.status)
+        if normalized_status not in CANONICAL_STATUSES:
+            log_error(
+                "/api/v1/runs",
+                "ValidationError",
+                f"Invalid status: {normalized_status}",
+                status=normalized_status,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status. Must be one of: {CANONICAL_STATUSES}"
+            )
+
+>>>>>>> Stashed changes
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO agent_runs (
@@ -595,62 +609,15 @@ async def create_run(
         )
 
 
-@app.get("/api/v1/metadata")
-async def get_metadata(
-    _rate_limit: None = Depends(check_rate_limit)
-):
-    """
-    Get metadata about available filter options.
-
-    Returns:
-        Dict with distinct agent_names and job_types from the database
-
-    Raises:
-        HTTPException: 500 for database errors
-    """
-    with track_duration() as get_duration:
-        try:
-            with get_db() as conn:
-                cursor = conn.cursor()
-
-                # Get distinct agent names
-                cursor.execute("SELECT DISTINCT agent_name FROM agent_runs WHERE agent_name IS NOT NULL ORDER BY agent_name")
-                agent_names = [row[0] for row in cursor.fetchall()]
-
-                # Get distinct job types
-                cursor.execute("SELECT DISTINCT job_type FROM agent_runs WHERE job_type IS NOT NULL ORDER BY job_type")
-                job_types = [row[0] for row in cursor.fetchall()]
-
-                log_query(
-                    query_params={},
-                    result_count=len(agent_names) + len(job_types),
-                    duration_ms=get_duration()
-                )
-
-                return {
-                    "agent_names": agent_names,
-                    "job_types": job_types,
-                    "counts": {
-                        "agent_names": len(agent_names),
-                        "job_types": len(job_types)
-                    }
-                }
-
-        except Exception as e:
-            log_error("/api/v1/metadata", "DatabaseError", str(e))
-            logger.error(f"[ERROR] Failed to fetch metadata: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to fetch metadata: {str(e)}"
-            )
-
-
 @app.get("/api/v1/runs")
 async def query_runs(
     request: Request,
     agent_name: Optional[str] = None,
-    status: Optional[str] = None,
+    status: Optional[List[str]] = Query(default=None),
     job_type: Optional[str] = None,
+    run_id_contains: Optional[str] = None,
+    parent_run_id: Optional[str] = None,
+    exclude_job_type: Optional[str] = None,
     created_before: Optional[str] = None,
     created_after: Optional[str] = None,
     start_time_from: Optional[str] = None,
@@ -664,8 +631,11 @@ async def query_runs(
 
     Args:
         agent_name: Filter by agent name (exact match)
-        status: Filter by status (running, success, failure, etc.)
-        job_type: Filter by job type
+        status: Filter by status (supports aliases and multiple values)
+        job_type: Filter by job type (exact match)
+        run_id_contains: Filter by substring match on run_id
+        parent_run_id: Filter by parent_run_id (exact match)
+        exclude_job_type: Exclude a job_type value
         created_before: ISO8601 timestamp - runs created before this time
         created_after: ISO8601 timestamp - runs created after this time
         start_time_from: ISO8601 timestamp - runs started after this time
@@ -680,6 +650,7 @@ async def query_runs(
         HTTPException: 400 if validation fails, 500 for database errors
     """
     with track_duration() as get_duration:
+<<<<<<< Updated upstream
         # Validate status if provided
         if status:
             allowed_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
@@ -689,6 +660,29 @@ async def query_runs(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail=f"Invalid status. Must be one of: {allowed_statuses}"
                 )
+=======
+        # Normalize status values (supports aliases and multi-status queries)
+        normalized_statuses: List[str] = []
+        if status:
+            for value in status:
+                if value is None:
+                    continue
+                parts = [part.strip() for part in str(value).split(",") if part.strip()]
+                normalized_statuses.extend(normalize_status_list(parts))
+
+        invalid_statuses = [s for s in normalized_statuses if s not in CANONICAL_STATUSES]
+        if invalid_statuses:
+            log_error(
+                "/api/v1/runs",
+                "ValidationError",
+                f"Invalid status values: {invalid_statuses}",
+                status=invalid_statuses,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid status. Must be one of: {CANONICAL_STATUSES}"
+            )
+>>>>>>> Stashed changes
 
         # Validate timestamps if provided
         for ts_name, ts_value in [
@@ -720,13 +714,32 @@ async def query_runs(
                     query += " AND agent_name = ?"
                     params.append(agent_name)
 
+<<<<<<< Updated upstream
                 if status:
                     query += " AND status = ?"
                     params.append(status)
+=======
+                if normalized_statuses:
+                    placeholders = ", ".join(["?"] * len(normalized_statuses))
+                    query += f" AND status IN ({placeholders})"
+                    params.extend(normalized_statuses)
+>>>>>>> Stashed changes
 
                 if job_type:
                     query += " AND job_type = ?"
                     params.append(job_type)
+
+                if exclude_job_type:
+                    query += " AND job_type != ?"
+                    params.append(exclude_job_type)
+
+                if run_id_contains:
+                    query += " AND run_id LIKE ?"
+                    params.append(f"%{run_id_contains}%")
+
+                if parent_run_id:
+                    query += " AND parent_run_id = ?"
+                    params.append(parent_run_id)
 
                 if created_before:
                     query += " AND created_at < ?"
@@ -785,8 +798,11 @@ async def query_runs(
                 # Build query_params dict for logging (exclude None values)
                 query_params = {k: v for k, v in {
                     "agent_name": agent_name,
-                    "status": status,
+                    "status": normalized_statuses or status,
                     "job_type": job_type,
+                    "exclude_job_type": exclude_job_type,
+                    "run_id_contains": run_id_contains,
+                    "parent_run_id": parent_run_id,
                     "created_before": created_before,
                     "created_after": created_after,
                     "start_time_from": start_time_from,
@@ -805,7 +821,7 @@ async def query_runs(
             raise
         except Exception as e:
             log_error("/api/v1/runs", type(e).__name__, str(e),
-                     agent_name=agent_name, status=status, limit=limit)
+                     agent_name=agent_name, status=normalized_statuses or status, limit=limit)
             logger.error(f"[ERROR] Failed to query runs: {e}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

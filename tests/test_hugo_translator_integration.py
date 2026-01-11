@@ -3,6 +3,9 @@
 Test script to verify hugo-translator can post telemetry to the API.
 
 This simulates what hugo-translator would do when posting telemetry events.
+
+NOTE: This script requires the telemetry API server to be running at localhost:8765.
+Run this script directly: python test_hugo_translator_integration.py
 """
 
 import sys
@@ -24,6 +27,14 @@ except ImportError:
 
 # Telemetry API endpoint (should match hugo-translator's .env)
 API_URL = "http://localhost:8765"
+
+
+# Guard against import-time execution
+if __name__ != "__main__":
+    # File is being imported (e.g., by pytest collection), not executed directly
+    # Skip all test execution to prevent connection attempts at import time
+    import sys as _sys
+    _sys.exit(0)
 
 print("=" * 70)
 print("HUGO-TRANSLATOR TELEMETRY INTEGRATION TEST")

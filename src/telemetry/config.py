@@ -10,6 +10,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +33,17 @@ class TelemetryConfig:
     # NDJSON raw events directory
     ndjson_dir: Path
 
-    # API configuration
-    api_url: Optional[str]
-    api_token: Optional[str]
-    api_enabled: bool
+    # Local HTTP API configuration (for HTTPAPIClient)
+    api_url: Optional[str]  # Local telemetry HTTP API (e.g., http://localhost:8765)
+
+    # Google Sheets API configuration (for APIClient)
+    google_sheets_api_url: Optional[str]  # External Google Sheets API endpoint
+    google_sheets_api_enabled: bool  # Enable Google Sheets export
+
+    # Legacy fields (backward compatibility)
+    api_token: Optional[str]  # Shared authentication token
+    api_enabled: bool  # Deprecated: use google_sheets_api_enabled
+    retry_backoff_factor: float  # Exponential backoff multiplier (default: 1.0)
 
     # Agent metadata
     agent_owner: Optional[str]
@@ -58,9 +66,11 @@ class TelemetryConfig:
             TELEMETRY_NDJSON_DIR: NDJSON directory override
             TELEMETRY_SKIP_VALIDATION: Skip directory validation (true/false)
 
-            METRICS_API_URL: Google Apps Script URL
+            TELEMETRY_API_URL: Local HTTP API URL (default: http://localhost:8765)
+            GOOGLE_SHEETS_API_URL: External Google Sheets API endpoint
+            GOOGLE_SHEETS_API_ENABLED: Enable Google Sheets export (default: false)
             METRICS_API_TOKEN: API authentication token
-            METRICS_API_ENABLED: Enable API posting (default: true)
+            METRICS_API_ENABLED: Deprecated, use GOOGLE_SHEETS_API_ENABLED
             AGENT_OWNER: Default agent owner name
             TELEMETRY_TEST_MODE: Test mode (mock|live)
 
@@ -105,13 +115,33 @@ class TelemetryConfig:
         skip_validation_str = os.getenv("TELEMETRY_SKIP_VALIDATION", "false").lower()
         skip_validation = skip_validation_str in ("true", "1", "yes", "on")
 
-        # API configuration
-        api_url = os.getenv("METRICS_API_URL")
+        # Local HTTP API configuration
+        api_url = os.getenv("TELEMETRY_API_URL") or os.getenv("METRICS_API_URL", "http://localhost:8765")
+
+        # Google Sheets API configuration
+        google_sheets_api_url = os.getenv("GOOGLE_SHEETS_API_URL")
+
+        # Google Sheets enabled flag (defaults to false for safety)
+        google_sheets_enabled_str = os.getenv("GOOGLE_SHEETS_API_ENABLED", "false").lower()
+        google_sheets_api_enabled = google_sheets_enabled_str in ("true", "1", "yes", "on")
+
+        # Legacy API configuration (backward compatibility)
         api_token = os.getenv("METRICS_API_TOKEN")
 
-        # API enabled by default, but can be disabled
-        api_enabled_str = os.getenv("METRICS_API_ENABLED", "true").lower()
+        # Legacy METRICS_API_ENABLED (deprecated, use GOOGLE_SHEETS_API_ENABLED)
+        api_enabled_str = os.getenv("METRICS_API_ENABLED", "false").lower()
         api_enabled = api_enabled_str in ("true", "1", "yes", "on")
+
+        # Retry backoff factor (default: 1.0)
+        retry_backoff_factor_str = os.getenv("TELEMETRY_RETRY_BACKOFF_FACTOR", "1.0")
+        try:
+            retry_backoff_factor = float(retry_backoff_factor_str)
+        except ValueError:
+            logger.warning(
+                f"Invalid TELEMETRY_RETRY_BACKOFF_FACTOR: {retry_backoff_factor_str}, "
+                f"using default 1.0"
+            )
+            retry_backoff_factor = 1.0
 
         # Agent metadata
         agent_owner = os.getenv("AGENT_OWNER")
@@ -124,8 +154,11 @@ class TelemetryConfig:
             database_path=database_path,
             ndjson_dir=ndjson_dir,
             api_url=api_url,
+            google_sheets_api_url=google_sheets_api_url,
+            google_sheets_api_enabled=google_sheets_api_enabled,
             api_token=api_token,
             api_enabled=api_enabled,
+            retry_backoff_factor=retry_backoff_factor,
             agent_owner=agent_owner,
             test_mode=test_mode,
             skip_validation=skip_validation,
@@ -218,18 +251,92 @@ class TelemetryConfig:
             for warning in warnings:
                 logger.warning(f"Configuration warning: {warning}")
 
-        # Warn if API is enabled but URL or token is missing
-        if self.api_enabled:
-            if not self.api_url:
+        # Validate Google Sheets API configuration
+        if self.google_sheets_api_enabled:
+            # Requirement 1: GOOGLE_SHEETS_API_URL is required when enabled
+            if not self.google_sheets_api_url or self.google_sheets_api_url.strip() == "":
                 errors.append(
-                    "METRICS_API_ENABLED=true but METRICS_API_URL is not set. "
-                    "API posting will fail."
+                    "GOOGLE_SHEETS_API_ENABLED=true but GOOGLE_SHEETS_API_URL is not set. "
+                    "Either set GOOGLE_SHEETS_API_URL to your Google Sheets endpoint, or set "
+                    "GOOGLE_SHEETS_API_ENABLED=false. See docs/MIGRATION_GUIDE.md for help."
                 )
-            if not self.api_token:
+            else:
+                # Validate URL format
+                try:
+                    parsed_url = urlparse(self.google_sheets_api_url)
+                    if not parsed_url.scheme or not parsed_url.netloc:
+                        errors.append(
+                            f"GOOGLE_SHEETS_API_URL is not a valid URL: {self.google_sheets_api_url}. "
+                            f"URL must include scheme (http/https) and host. "
+                            f"Example: https://sheets.googleapis.com/v4/spreadsheets/..."
+                        )
+                except Exception as e:
+                    errors.append(
+                        f"GOOGLE_SHEETS_API_URL is invalid: {self.google_sheets_api_url}. "
+                        f"Error: {e}"
+                    )
+
+            # Token only required if auth is explicitly required
+            # Default: false (for auth-disabled endpoints)
+            auth_required_str = os.getenv("METRICS_API_AUTH_REQUIRED", "false").lower()
+            auth_required = auth_required_str in ("true", "1", "yes", "on")
+
+            if auth_required and not self.api_token:
                 errors.append(
-                    "METRICS_API_ENABLED=true but METRICS_API_TOKEN is not set. "
-                    "API posting will fail."
+                    "GOOGLE_SHEETS_API_ENABLED=true and METRICS_API_AUTH_REQUIRED=true "
+                    "but METRICS_API_TOKEN is not set. Google Sheets export will fail."
                 )
+            elif not self.api_token:
+                # Info-level log instead of error for auth-disabled endpoints
+                logger.info(
+                    "API token not set - assuming auth-disabled Google Sheets endpoint. "
+                    "Set METRICS_API_AUTH_REQUIRED=true if auth is needed."
+                )
+
+        # Validate local API URL format (if provided)
+        if self.api_url:
+            try:
+                parsed_api_url = urlparse(self.api_url)
+                if not parsed_api_url.scheme or not parsed_api_url.netloc:
+                    errors.append(
+                        f"TELEMETRY_API_URL is not a valid URL: {self.api_url}. "
+                        f"URL must include scheme (http/https) and host. "
+                        f"Example: http://localhost:8765"
+                    )
+            except Exception as e:
+                errors.append(
+                    f"TELEMETRY_API_URL is invalid: {self.api_url}. Error: {e}"
+                )
+
+        # Requirement 2: Warn if both URLs point to same host (likely misconfiguration)
+        if (self.google_sheets_api_enabled and
+            self.google_sheets_api_url and
+            self.api_url):
+            try:
+                google_sheets_host = urlparse(self.google_sheets_api_url).netloc
+                api_host = urlparse(self.api_url).netloc
+
+                if google_sheets_host and api_host and google_sheets_host == api_host:
+                    warning_msg = (
+                        f"WARNING: Both TELEMETRY_API_URL and GOOGLE_SHEETS_API_URL point to "
+                        f"the same host ({api_host}). This is likely a misconfiguration. "
+                        f"TELEMETRY_API_URL should point to your local-telemetry API (e.g., "
+                        f"http://localhost:8765), while GOOGLE_SHEETS_API_URL should point to "
+                        f"the external Google Sheets API endpoint. See docs/MIGRATION_GUIDE.md "
+                        f"for proper configuration."
+                    )
+                    warnings.append(warning_msg)
+                    logger.warning(warning_msg)
+            except Exception:
+                # If URL parsing fails, skip same-host check (other validations will catch it)
+                pass
+
+        # Check legacy METRICS_API_ENABLED (deprecated)
+        if self.api_enabled and not self.google_sheets_api_enabled:
+            logger.warning(
+                "METRICS_API_ENABLED is deprecated. Use GOOGLE_SHEETS_API_ENABLED instead. "
+                "This setting is ignored when GOOGLE_SHEETS_API_ENABLED is explicitly set."
+            )
 
         is_valid = len(errors) == 0
         return is_valid, errors
@@ -255,6 +362,8 @@ class TelemetryConfig:
             f"database_path={self.database_path}, "
             f"ndjson_dir={self.ndjson_dir}, "
             f"api_url={self.api_url}, "
+            f"google_sheets_api_url={self.google_sheets_api_url}, "
+            f"google_sheets_api_enabled={self.google_sheets_api_enabled}, "
             f"api_token={masked_token}, "
             f"api_enabled={self.api_enabled}, "
             f"agent_owner={self.agent_owner}, "
@@ -302,6 +411,13 @@ class TelemetryAPIConfig:
 
     # Logging
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # Telemetry Optimization
+    TELEMETRY_LEVEL: str = os.getenv("TELEMETRY_LEVEL", "INFO")
+    TELEMETRY_SAMPLING_RATE: float = float(os.getenv("TELEMETRY_SAMPLING_RATE", "1.0"))
+    TELEMETRY_MAX_PAYLOAD_BYTES: int = int(os.getenv("TELEMETRY_MAX_PAYLOAD_BYTES", "1024"))
+    TELEMETRY_RETENTION_DAYS: int = int(os.getenv("TELEMETRY_RETENTION_DAYS", "30"))
+    TELEMETRY_DRY_RUN_CLEANUP: bool = os.getenv("TELEMETRY_DRY_RUN_CLEANUP", "1") == "1"
 
     @classmethod
     def validate(cls):

@@ -7,6 +7,9 @@ Tests:
 2. Verify configuration loads
 3. Test telemetry service can be imported
 4. Simulate a simple startup check
+
+NOTE: This is a standalone deployment verification script.
+Run this script directly: python test_deployment.py
 """
 
 import sys
@@ -17,6 +20,14 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root / "src"))
 sys.path.insert(0, r"C:\Users\prora\AppData\Roaming\Python\Python313\site-packages")
+
+
+# Guard against import-time execution
+if __name__ != "__main__":
+    # File is being imported (e.g., by pytest collection), not executed directly
+    # Skip all test execution to prevent sys.exit() at import time
+    import sys as _sys
+    _sys.exit(0)
 
 print("=" * 70)
 print("DEPLOYMENT TEST")

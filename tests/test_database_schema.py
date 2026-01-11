@@ -135,7 +135,7 @@ class TestCreateSchema:
 
         assert result is not None
         assert result[0] == schema.SCHEMA_VERSION
-        assert "Initial schema" in result[1]
+        assert "Schema v6" in result[1]
 
     def test_idempotent_execution(self, tmp_path):
         """Should be safe to run multiple times."""
@@ -359,6 +359,7 @@ class TestExportSchemaSql:
         content = output_path.read_text(encoding="utf-8")
 
         assert "PRAGMA journal_mode=DELETE" in content
+        assert "PRAGMA synchronous=FULL" in content
 
     def test_creates_parent_directories(self, tmp_path):
         """Should create parent directories if needed."""
@@ -403,7 +404,7 @@ class TestSchemaConstraints:
     """Test that schema constraints work correctly."""
 
     def test_agent_runs_primary_key(self, tmp_path):
-        """run_id should be primary key in agent_runs."""
+        """event_id should be unique in agent_runs."""
         db_path = tmp_path / "test.db"
         schema.create_schema(str(db_path))
 
@@ -412,21 +413,21 @@ class TestSchemaConstraints:
 
         # Insert first row
         cursor.execute(
-            "INSERT INTO agent_runs (run_id, agent_name, start_time) VALUES (?, ?, ?)",
-            ("test_run_1", "test_agent", "2025-12-10T00:00:00Z"),
+            "INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time) VALUES (?, ?, ?, ?, ?)",
+            ("event-1", "test_run_1", "test_agent", "test_job", "2025-12-10T00:00:00Z"),
         )
 
-        # Try to insert duplicate run_id - should fail
+        # Try to insert duplicate event_id - should fail
         with pytest.raises(sqlite3.IntegrityError):
             cursor.execute(
-                "INSERT INTO agent_runs (run_id, agent_name, start_time) VALUES (?, ?, ?)",
-                ("test_run_1", "test_agent", "2025-12-10T00:00:00Z"),
+                "INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time) VALUES (?, ?, ?, ?, ?)",
+                ("event-1", "test_run_2", "test_agent", "test_job", "2025-12-10T00:00:00Z"),
             )
 
         conn.close()
 
     def test_trigger_type_constraint(self, tmp_path):
-        """trigger_type should only accept valid values."""
+        """trigger_type accepts arbitrary values (no DB constraint)."""
         db_path = tmp_path / "test.db"
         schema.create_schema(str(db_path))
 
@@ -436,16 +437,15 @@ class TestSchemaConstraints:
         # Valid trigger types should work
         for trigger_type in ["cli", "web", "scheduler", "mcp", "manual"]:
             cursor.execute(
-                "INSERT INTO agent_runs (run_id, agent_name, start_time, trigger_type) VALUES (?, ?, ?, ?)",
-                (f"run_{trigger_type}", "test_agent", "2025-12-10T00:00:00Z", trigger_type),
+                "INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time, trigger_type) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"event_{trigger_type}", f"run_{trigger_type}", "test_agent", "test_job", "2025-12-10T00:00:00Z", trigger_type),
             )
 
-        # Invalid trigger type should fail
-        with pytest.raises(sqlite3.IntegrityError):
-            cursor.execute(
-                "INSERT INTO agent_runs (run_id, agent_name, start_time, trigger_type) VALUES (?, ?, ?, ?)",
-                ("run_invalid", "test_agent", "2025-12-10T00:00:00Z", "invalid_type"),
-            )
+        # Invalid trigger type should still be accepted
+        cursor.execute(
+            "INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time, trigger_type) VALUES (?, ?, ?, ?, ?, ?)",
+            ("event_invalid", "run_invalid", "test_agent", "test_job", "2025-12-10T00:00:00Z", "invalid_type"),
+        )
 
         conn.close()
 
@@ -458,17 +458,17 @@ class TestSchemaConstraints:
         cursor = conn.cursor()
 
         # Valid statuses should work
-        for status in ["running", "success", "failed", "partial"]:
+        for status in ["running", "success", "failure", "partial", "timeout", "cancelled"]:
             cursor.execute(
-                "INSERT INTO agent_runs (run_id, agent_name, start_time, status) VALUES (?, ?, ?, ?)",
-                (f"run_{status}", "test_agent", "2025-12-10T00:00:00Z", status),
+                "INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time, status) VALUES (?, ?, ?, ?, ?, ?)",
+                (f"event_{status}", f"run_{status}", "test_agent", "test_job", "2025-12-10T00:00:00Z", status),
             )
 
         # Invalid status should fail
         with pytest.raises(sqlite3.IntegrityError):
             cursor.execute(
-                "INSERT INTO agent_runs (run_id, agent_name, start_time, status) VALUES (?, ?, ?, ?)",
-                ("run_invalid", "test_agent", "2025-12-10T00:00:00Z", "invalid_status"),
+                "INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time, status) VALUES (?, ?, ?, ?, ?, ?)",
+                ("event_invalid_status", "run_invalid", "test_agent", "test_job", "2025-12-10T00:00:00Z", "invalid_status"),
             )
 
         conn.close()
@@ -512,10 +512,10 @@ class TestIntegration:
         # Insert into agent_runs
         cursor.execute(
             """
-            INSERT INTO agent_runs (run_id, agent_name, start_time, status)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO agent_runs (event_id, run_id, agent_name, job_type, start_time, status)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            ("test_run_1", "test_agent", "2025-12-10T00:00:00Z", "success"),
+            ("event_1", "test_run_1", "test_agent", "test_job", "2025-12-10T00:00:00Z", "success"),
         )
 
         # Insert into run_events

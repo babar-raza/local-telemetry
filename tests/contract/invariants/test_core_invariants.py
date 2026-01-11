@@ -62,7 +62,7 @@ def test_invariant_never_crash_agent():
         assert True, "start_run completed without exception"
 
         # end_run should handle missing run gracefully
-        client.end_run(event_id="nonexistent", status="completed")
+        client.end_run(event_id="nonexistent", status="success")
         assert True, "end_run completed without exception"
 
     except Exception as e:
@@ -137,7 +137,7 @@ def test_invariant_event_idempotency(api_base_url, unique_event_id, test_event_i
         event_id=unique_event_id,
         agent_name="contract-test-idempotency",
         job_type="idempotency-test",
-        status="completed",
+        status="success",
         duration_ms=100
     )
 
@@ -269,7 +269,7 @@ def test_invariant_non_negative_metrics(api_base_url, unique_event_id, test_even
 @pytest.mark.contract
 def test_invariant_status_constraints(api_base_url, test_event_ids):
     """
-    CONTRACT: Status field MUST be one of: running, completed, failed, partial
+    CONTRACT: Status field MUST be one of: running, success, failure, partial, timeout, cancelled
     SPEC: specs/_index.md#7-status-value-constraints
     RATIONALE: Prevent invalid states in queries and reports
 
@@ -294,7 +294,7 @@ def test_invariant_status_constraints(api_base_url, test_event_ids):
         f"Expected 422 for invalid status, got {resp.status_code}"
 
     # Test all valid statuses
-    valid_statuses = ["running", "completed", "failed", "partial"]
+    valid_statuses = ["running", "success", "failure", "partial", "timeout", "cancelled"]
     for valid_status in valid_statuses:
         event_id = str(uuid.uuid4())
         test_event_ids.append(event_id)

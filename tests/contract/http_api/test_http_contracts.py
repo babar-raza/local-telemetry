@@ -208,14 +208,14 @@ def test_http_query_runs_filters(api_base_url, test_event_ids):
 
     VERIFICATION:
     - GET /api/v1/runs?agent_name=test → only test agent runs
-    - GET /api/v1/runs?status=completed → only completed runs
+    - GET /api/v1/runs?status=completed → only success runs (alias normalization)
     - GET /api/v1/runs?agent_name=test&status=completed → both filters applied
     """
     # Create test runs with known agent_name and status
     test_agent = "contract-test-filter-agent"
     other_agent = "contract-test-other-agent"
 
-    # Create 2 completed runs for test_agent
+    # Create 2 completed (alias) runs for test_agent
     for i in range(2):
         event_id = str(uuid.uuid4())
         test_event_ids.append(event_id)
@@ -226,13 +226,13 @@ def test_http_query_runs_filters(api_base_url, test_event_ids):
         )
         post_run(api_base_url, payload)
 
-    # Create 1 failed run for test_agent
+    # Create 1 failed (alias) run for test_agent
     event_id = str(uuid.uuid4())
     test_event_ids.append(event_id)
     payload = create_test_run(event_id=event_id, agent_name=test_agent, status="failed")
     post_run(api_base_url, payload)
 
-    # Create 1 completed run for other_agent
+    # Create 1 completed (alias) run for other_agent
     event_id = str(uuid.uuid4())
     test_event_ids.append(event_id)
     payload = create_test_run(event_id=event_id, agent_name=other_agent, status="completed")
@@ -249,15 +249,15 @@ def test_http_query_runs_filters(api_base_url, test_event_ids):
     resp = get_runs(api_base_url, {"status": "completed"})
     assert resp.status_code == 200
     data = resp.json()
-    assert all(r["status"] == "completed" for r in data), \
-        "All runs should match status filter"
+    assert all(r["status"] == "success" for r in data), \
+        "All runs should match status filter (canonical status)"
 
     # Test 3: Filter by both agent_name AND status
     resp = get_runs(api_base_url, {"agent_name": test_agent, "status": "completed"})
     assert resp.status_code == 200
     data = resp.json()
-    assert all(r["agent_name"] == test_agent and r["status"] == "completed" for r in data), \
-        "All runs should match both filters"
+    assert all(r["agent_name"] == test_agent and r["status"] == "success" for r in data), \
+        "All runs should match both filters (canonical status)"
 
 
 # =============================================================================
@@ -273,7 +273,7 @@ def test_http_update_run_partial_update(api_base_url, unique_event_id, test_even
 
     VERIFICATION:
     - Create run with status=running
-    - PATCH with status=completed, end_time, duration_ms
+    - PATCH with status=completed (alias), end_time, duration_ms
     - Verify only updated fields changed
     - Verify other fields unchanged
     """
@@ -308,7 +308,7 @@ def test_http_update_run_partial_update(api_base_url, unique_event_id, test_even
     run = get_run_from_db(db_path, unique_event_id)
 
     # 4. Confirm only patched fields changed
-    assert run["status"] == "completed", "Status should be updated"
+    assert run["status"] == "success", "Status should be updated to canonical value"
     assert run["duration_ms"] == 5000, "Duration should be updated"
     assert run["job_type"] == original_job_type, "Unpatched fields should remain unchanged"
 
@@ -426,6 +426,607 @@ def test_http_batch_create(api_base_url, test_event_ids, db_path):
 
 
 # =============================================================================
+# GT-03: Git Commit Field Validation Tests
+# =============================================================================
+
+@pytest.mark.contract
+def test_post_run_with_valid_git_commit_source(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: POST /api/v1/runs with valid git_commit_source values
+    SPEC: GT-03 Complete FastAPI Pydantic Model
+    RATIONALE: Validate git_commit_source accepts 'manual', 'llm', 'ci'
+
+    VERIFICATION:
+    - POST with git_commit_source='llm' (and 'manual', 'ci')
+    - Expect 201 Created for all valid values
+    """
+    test_event_ids.append(unique_event_id)
+
+    valid_sources = ['manual', 'llm', 'ci']
+
+    for source in valid_sources:
+        event_id = f"{unique_event_id}-{source}"
+        test_event_ids.append(event_id)
+
+        payload = create_test_run(
+            event_id=event_id,
+            agent_name=f"gt03-test-{source}",
+            job_type="validation-test",
+            status="success",
+            git_commit_source=source,
+            git_commit_author="Claude <noreply@anthropic.com>",
+            git_commit_timestamp="2026-01-01T12:00:00Z"
+        )
+
+        resp = post_run(api_base_url, payload)
+        assert_created_response(resp, event_id)
+
+
+@pytest.mark.contract
+def test_post_run_with_invalid_git_commit_source(api_base_url, unique_event_id):
+    """
+    CONTRACT: POST /api/v1/runs rejects invalid git_commit_source
+    SPEC: GT-03 Complete FastAPI Pydantic Model
+    RATIONALE: Validate git_commit_source validation enforces allowed values
+
+    VERIFICATION:
+    - POST with git_commit_source='invalid_value'
+    - Expect 422 Unprocessable Entity
+    """
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt03-test-invalid",
+        job_type="validation-test",
+        status="success",
+        git_commit_source="invalid_value"  # Invalid value
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert resp.status_code == 422, \
+        f"Expected 422 for invalid git_commit_source, got {resp.status_code}"
+
+    # Verify error message mentions git_commit_source
+    error_data = resp.json()
+    error_str = str(error_data).lower()
+    assert 'git_commit_source' in error_str, \
+        "Error response should mention git_commit_source field"
+
+
+@pytest.mark.contract
+def test_patch_run_with_git_commit_fields(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: PATCH /api/v1/runs/{event_id} accepts git_commit_* updates
+    SPEC: GT-03 Complete FastAPI Pydantic Model
+    RATIONALE: Validate RunUpdate model includes git_commit_source, author, timestamp
+
+    VERIFICATION:
+    - Create run without git fields
+    - PATCH to add git_commit_source, git_commit_author, git_commit_timestamp
+    - Expect 200 OK
+    """
+    test_event_ids.append(unique_event_id)
+
+    # Create initial run without git fields
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt03-test-patch",
+        job_type="validation-test",
+        status="running"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Patch to add git fields
+    patch_payload = {
+        "git_commit_source": "llm",
+        "git_commit_author": "Claude Sonnet <noreply@anthropic.com>",
+        "git_commit_timestamp": "2026-01-01T14:30:00Z",
+        "status": "success"
+    }
+
+    patch_resp = patch_run(api_base_url, unique_event_id, patch_payload)
+    assert patch_resp.status_code == 200, \
+        f"Expected 200 for PATCH with git fields, got {patch_resp.status_code}"
+
+
+@pytest.mark.contract
+def test_patch_run_with_invalid_git_commit_source(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: PATCH /api/v1/runs/{event_id} rejects invalid git_commit_source
+    SPEC: GT-03 Complete FastAPI Pydantic Model
+    RATIONALE: Validate git_commit_source validation works in PATCH requests
+
+    VERIFICATION:
+    - Create run
+    - PATCH with git_commit_source='bad_value'
+    - Expect 422 Unprocessable Entity
+    """
+    test_event_ids.append(unique_event_id)
+
+    # Create initial run
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt03-test-patch-invalid",
+        job_type="validation-test",
+        status="running"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Patch with invalid git_commit_source
+    patch_payload = {
+        "git_commit_source": "automated",  # Invalid: only 'manual', 'llm', 'ci' allowed
+        "status": "success"
+    }
+
+    patch_resp = patch_run(api_base_url, unique_event_id, patch_payload)
+    assert patch_resp.status_code == 422, \
+        f"Expected 422 for invalid git_commit_source in PATCH, got {patch_resp.status_code}"
+
+
+# =============================================================================
+# GT-04: Commit Association HTTP Endpoint Tests
+# =============================================================================
+
+@pytest.mark.contract
+def test_post_associate_commit_success(api_base_url, unique_event_id, test_event_ids, db_path):
+    """
+    CONTRACT: POST /api/v1/runs/{event_id}/associate-commit with valid data
+    SPEC: GT-04 Commit Association HTTP Endpoint
+    RATIONALE: Enable HTTP-based commit association for agent runs
+
+    VERIFICATION:
+    - Create run via POST
+    - POST commit association with valid data
+    - Expect 200 OK
+    - Verify commit fields updated in database
+    """
+    test_event_ids.append(unique_event_id)
+
+    # Create initial run
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt04-test-success",
+        job_type="commit-association-test",
+        status="success"
+    )
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Associate commit
+    commit_data = {
+        "commit_hash": "abc1234567890abcdef",
+        "commit_source": "llm",
+        "commit_author": "Claude Code <noreply@anthropic.com>",
+        "commit_timestamp": "2026-01-02T10:00:00Z"
+    }
+
+    resp = requests.post(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/associate-commit",
+        json=commit_data,
+        timeout=10
+    )
+
+    assert resp.status_code == 200, f"Expected 200 OK, got {resp.status_code}"
+
+    result = resp.json()
+    assert result["status"] == "success"
+    assert result["event_id"] == unique_event_id
+    assert result["commit_hash"] == "abc1234567890abcdef"
+
+    # Verify in database
+    from tests.contract.helpers import wait_for_run_in_db, get_run_from_db
+    wait_for_run_in_db(db_path, unique_event_id, timeout=1.0)
+    run = get_run_from_db(db_path, unique_event_id)
+
+    assert run is not None, "Run should exist in database"
+    assert run["git_commit_hash"] == "abc1234567890abcdef"
+    assert run["git_commit_source"] == "llm"
+    assert run["git_commit_author"] == "Claude Code <noreply@anthropic.com>"
+    assert run["git_commit_timestamp"] == "2026-01-02T10:00:00Z"
+
+
+@pytest.mark.contract
+def test_post_associate_commit_run_not_found(api_base_url):
+    """
+    CONTRACT: POST /api/v1/runs/{event_id}/associate-commit returns 404 for non-existent run
+    SPEC: GT-04 Commit Association HTTP Endpoint
+    RATIONALE: Prevent associating commits with non-existent runs
+
+    VERIFICATION:
+    - POST commit association with non-existent event_id
+    - Expect 404 Not Found
+    """
+    commit_data = {
+        "commit_hash": "abc1234567890",
+        "commit_source": "manual"
+    }
+
+    resp = requests.post(
+        f"{api_base_url}/api/v1/runs/nonexistent-event-id/associate-commit",
+        json=commit_data,
+        timeout=10
+    )
+
+    assert resp.status_code == 404, f"Expected 404 Not Found, got {resp.status_code}"
+
+    error_data = resp.json()
+    assert "detail" in error_data
+    assert "not found" in error_data["detail"].lower()
+
+
+@pytest.mark.contract
+def test_post_associate_commit_invalid_source(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: POST /api/v1/runs/{event_id}/associate-commit validates commit_source
+    SPEC: GT-04 Commit Association HTTP Endpoint
+    RATIONALE: Enforce commit_source enum ('manual', 'llm', 'ci')
+
+    VERIFICATION:
+    - Create run
+    - POST commit association with invalid commit_source
+    - Expect 422 Unprocessable Entity
+    """
+    test_event_ids.append(unique_event_id)
+
+    # Create initial run
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt04-test-invalid-source",
+        job_type="validation-test",
+        status="success"
+    )
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Try to associate with invalid commit_source
+    commit_data = {
+        "commit_hash": "abc1234567890",
+        "commit_source": "automated"  # Invalid: only 'manual', 'llm', 'ci' allowed
+    }
+
+    resp = requests.post(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/associate-commit",
+        json=commit_data,
+        timeout=10
+    )
+
+    assert resp.status_code == 422, \
+        f"Expected 422 for invalid commit_source, got {resp.status_code}"
+
+    # Verify error message
+    error_data = resp.json()
+    error_str = str(error_data).lower()
+    assert 'commit_source' in error_str, \
+        "Error response should mention commit_source field"
+
+
+@pytest.mark.contract
+def test_post_associate_commit_all_sources(api_base_url, unique_event_id, test_event_ids, db_path):
+    """
+    CONTRACT: POST /api/v1/runs/{event_id}/associate-commit accepts all valid commit_source values
+    SPEC: GT-04 Commit Association HTTP Endpoint
+    RATIONALE: Verify all three allowed values work
+
+    VERIFICATION:
+    - Test commit_source='manual', 'llm', 'ci'
+    - All should return 200 OK
+    """
+    valid_sources = ['manual', 'llm', 'ci']
+
+    for source in valid_sources:
+        event_id = f"{unique_event_id}-{source}"
+        test_event_ids.append(event_id)
+
+        # Create run
+        payload = create_test_run(
+            event_id=event_id,
+            agent_name=f"gt04-test-{source}",
+            job_type="source-validation-test",
+            status="success"
+        )
+        resp = post_run(api_base_url, payload)
+        assert_created_response(resp, event_id)
+
+        # Associate commit
+        commit_data = {
+            "commit_hash": f"abc123456789{source}",
+            "commit_source": source
+        }
+
+        resp = requests.post(
+            f"{api_base_url}/api/v1/runs/{event_id}/associate-commit",
+            json=commit_data,
+            timeout=10
+        )
+
+        assert resp.status_code == 200, \
+            f"Expected 200 for commit_source={source}, got {resp.status_code}"
+
+
+@pytest.mark.contract
+def test_post_associate_commit_minimal_payload(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: POST /api/v1/runs/{event_id}/associate-commit with minimal required fields
+    SPEC: GT-04 Commit Association HTTP Endpoint
+    RATIONALE: Verify only commit_hash and commit_source are required
+
+    VERIFICATION:
+    - Create run
+    - POST with only commit_hash and commit_source (no author or timestamp)
+    - Expect 200 OK
+    """
+    test_event_ids.append(unique_event_id)
+
+    # Create initial run
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt04-test-minimal",
+        job_type="minimal-payload-test",
+        status="success"
+    )
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Associate commit with minimal data
+    commit_data = {
+        "commit_hash": "def456789",
+        "commit_source": "ci"
+    }
+
+    resp = requests.post(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/associate-commit",
+        json=commit_data,
+        timeout=10
+    )
+
+    assert resp.status_code == 200, f"Expected 200 OK, got {resp.status_code}"
+
+    result = resp.json()
+    assert result["status"] == "success"
+    assert result["commit_hash"] == "def456789"
+
+
+# =============================================================================
+# GT-02: GitHub/GitLab URL Construction Endpoints
+# =============================================================================
+
+@pytest.mark.contract
+def test_get_commit_url_github(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: GET /api/v1/runs/{event_id}/commit-url returns GitHub commit URL
+    SPEC: GT-02 GitHub/GitLab URL Construction Endpoints
+    RATIONALE: Provide clickable commit URLs for GitHub repositories
+
+    VERIFICATION:
+    - Create run with GitHub repo and commit hash
+    - GET /api/v1/runs/{event_id}/commit-url
+    - Expect 200 OK with commit_url in correct GitHub format
+    """
+    test_event_ids.append(unique_event_id)
+
+    # Create run with GitHub repository metadata
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt02-test-github",
+        job_type="url-builder-test",
+        status="success",
+        git_repo="https://github.com/owner/repo",
+        git_commit_hash="abc1234567890"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Get commit URL
+    resp = requests.get(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/commit-url",
+        timeout=10
+    )
+
+    assert resp.status_code == 200, f"Expected 200 OK, got {resp.status_code}"
+
+    data = resp.json()
+    assert "commit_url" in data
+    assert data["commit_url"] == "https://github.com/owner/repo/commit/abc1234567890"
+
+
+@pytest.mark.contract
+def test_get_commit_url_gitlab(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: GET /api/v1/runs/{event_id}/commit-url returns GitLab commit URL
+    SPEC: GT-02 GitHub/GitLab URL Construction Endpoints
+    RATIONALE: Support GitLab repository commit URLs with correct /-/ separator
+
+    VERIFICATION:
+    - Create run with GitLab repo
+    - GET commit-url
+    - Expect GitLab format: https://gitlab.com/owner/repo/-/commit/hash
+    """
+    test_event_ids.append(unique_event_id)
+
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt02-test-gitlab",
+        job_type="url-builder-test",
+        status="success",
+        git_repo="https://gitlab.com/owner/repo",
+        git_commit_hash="def4567890abc"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    resp = requests.get(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/commit-url",
+        timeout=10
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["commit_url"] == "https://gitlab.com/owner/repo/-/commit/def4567890abc"
+
+
+@pytest.mark.contract
+def test_get_commit_url_ssh_url_normalization(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: GET /api/v1/runs/{event_id}/commit-url normalizes SSH URLs to HTTPS
+    SPEC: GT-02 GitHub/GitLab URL Construction Endpoints
+    RATIONALE: git@ SSH URLs should be converted to clickable HTTPS URLs
+
+    VERIFICATION:
+    - Create run with SSH format git@github.com:owner/repo.git
+    - GET commit-url
+    - Expect normalized HTTPS URL
+    """
+    test_event_ids.append(unique_event_id)
+
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt02-test-ssh",
+        job_type="url-builder-test",
+        status="success",
+        git_repo="git@github.com:owner/repo.git",
+        git_commit_hash="123abc456def"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    resp = requests.get(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/commit-url",
+        timeout=10
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["commit_url"] == "https://github.com/owner/repo/commit/123abc456def"
+
+
+@pytest.mark.contract
+def test_get_commit_url_missing_git_data_returns_null(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: GET /api/v1/runs/{event_id}/commit-url returns null when git data missing
+    SPEC: GT-02 GitHub/GitLab URL Construction Endpoints
+    RATIONALE: Gracefully handle runs without git metadata
+
+    VERIFICATION:
+    - Create run without git_repo or git_commit_hash
+    - GET commit-url
+    - Expect 200 OK with commit_url: null
+    """
+    test_event_ids.append(unique_event_id)
+
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt02-test-no-git",
+        job_type="url-builder-test",
+        status="success"
+        # No git_repo or git_commit_hash
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    resp = requests.get(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/commit-url",
+        timeout=10
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["commit_url"] is None
+
+
+@pytest.mark.contract
+def test_get_repo_url_normalizes_and_removes_git_extension(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: GET /api/v1/runs/{event_id}/repo-url returns normalized repo URL
+    SPEC: GT-02 GitHub/GitLab URL Construction Endpoints
+    RATIONALE: Provide clean repository URLs without .git extension
+
+    VERIFICATION:
+    - Create run with .git extension in repo URL
+    - GET repo-url
+    - Expect normalized URL without .git
+    """
+    test_event_ids.append(unique_event_id)
+
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt02-test-repo-url",
+        job_type="url-builder-test",
+        status="success",
+        git_repo="https://github.com/owner/repo.git",
+        git_commit_hash="any"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    resp = requests.get(
+        f"{api_base_url}/api/v1/runs/{unique_event_id}/repo-url",
+        timeout=10
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "repo_url" in data
+    assert data["repo_url"] == "https://github.com/owner/repo"
+
+
+@pytest.mark.contract
+def test_get_runs_includes_commit_url_and_repo_url_fields(api_base_url, unique_event_id, test_event_ids):
+    """
+    CONTRACT: GET /api/v1/runs includes commit_url and repo_url in response
+    SPEC: GT-02 GitHub/GitLab URL Construction Endpoints
+    RATIONALE: Enhance query endpoint with URL fields for convenience
+
+    VERIFICATION:
+    - Create run with git metadata
+    - GET /api/v1/runs with filter
+    - Verify response includes commit_url and repo_url fields
+    """
+    test_event_ids.append(unique_event_id)
+
+    payload = create_test_run(
+        event_id=unique_event_id,
+        agent_name="gt02-test-query-urls",
+        job_type="url-enhancement-test",
+        status="success",
+        git_repo="https://github.com/test/repo",
+        git_commit_hash="testcommit789"
+    )
+
+    resp = post_run(api_base_url, payload)
+    assert_created_response(resp, unique_event_id)
+
+    # Query runs
+    resp = requests.get(
+        f"{api_base_url}/api/v1/runs?agent_name=gt02-test-query-urls&limit=1",
+        timeout=10
+    )
+
+    assert resp.status_code == 200
+    runs = resp.json()
+    assert len(runs) >= 1
+
+    # Find our run
+    test_run = next((r for r in runs if r["event_id"] == unique_event_id), None)
+    assert test_run is not None, f"Run {unique_event_id} not found in results"
+
+    # Verify URL fields present
+    assert "commit_url" in test_run
+    assert "repo_url" in test_run
+
+    # Verify URL values correct
+    assert test_run["commit_url"] == "https://github.com/test/repo/commit/testcommit789"
+    assert test_run["repo_url"] == "https://github.com/test/repo"
+
+
+# =============================================================================
 # Test Summary
 # =============================================================================
 """
@@ -434,6 +1035,9 @@ CONTRACT TEST SUMMARY:
 - 2 tests fully implemented (health, metrics)
 - 10 tests skeletonized (create, query, update, batch)
 - All tests marked with @pytest.mark.contract
+- GT-02: 6 URL builder contract tests added
+- GT-03: 3 Pydantic validation contract tests added
+- GT-04: 4 commit association contract tests added
 
 NEXT STEPS:
 1. Implement TODO sections for remaining tests

@@ -74,10 +74,3 @@ def isolate_test_runs(request):
     # After test: cleanup will be handled by cleanup_test_runs fixture if used
     pass
 
-
-# =============================================================================
-# Import all fixtures from fixtures.py
-# =============================================================================
-
-# This ensures fixtures are available to all contract tests
-pytest_plugins = ["tests.contract.fixtures"]

@@ -8,6 +8,9 @@ Tests:
 3. POST duplicate event (test idempotency)
 4. POST batch of events
 5. Verify all events in database
+
+NOTE: This script requires the telemetry API server to be running at localhost:8765.
+Run this script directly: python test_api_e2e.py
 """
 
 import sys
@@ -28,6 +31,14 @@ except ImportError:
     import requests
 
 API_URL = "http://localhost:8765"
+
+
+# Guard against import-time execution
+if __name__ != "__main__":
+    # File is being imported (e.g., by pytest collection), not executed directly
+    # Skip all test execution to prevent connection attempts at import time
+    import sys as _sys
+    _sys.exit(0)
 
 print("=" * 70)
 print("TELEMETRY API - END-TO-END TEST")

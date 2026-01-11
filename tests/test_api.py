@@ -4,11 +4,23 @@ Tests for telemetry.api module
 Tests cover:
 - APIClient initialization
 - Configuration checking
-- Synchronous API posting
+- Synchronous API posting to Google Sheets API
 - Asynchronous API posting
 - Exponential backoff retry logic
 - Error handling
 - Connection testing
+
+NO MOCKING POLICY EXCEPTION:
+This file tests APIClient which posts to EXTERNAL Google Sheets API (not our service).
+We CANNOT make real HTTP calls to Google Sheets in tests, so httpx mocking is REQUIRED.
+
+This is an ACCEPTABLE exception to the NO MOCKING policy because:
+1. External API (Google Apps Script) - not under our control
+2. Requires authentication credentials not available in test environment
+3. Would cause side effects (writing to real spreadsheet)
+4. HTTP mocking is the industry-standard approach for external API testing
+
+All other test files use REAL file operations and REAL internal HTTP API calls.
 """
 
 import sys

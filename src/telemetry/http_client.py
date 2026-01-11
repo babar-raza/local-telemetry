@@ -358,6 +358,114 @@ class HTTPAPIClient:
             logger.debug(f"Failed to get metrics: {e}")
             return None
 
+    def associate_commit(
+        self,
+        event_id: str,
+        commit_hash: str,
+        commit_source: str,
+        commit_author: Optional[str] = None,
+        commit_timestamp: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Associate a git commit with a telemetry run via HTTP API.
+
+        Args:
+            event_id: Event ID of the run
+            commit_hash: Git commit SHA (7-40 hex characters)
+            commit_source: How commit was created ('manual', 'llm', 'ci')
+            commit_author: Optional author string (e.g., "Name <email>")
+            commit_timestamp: Optional ISO8601 timestamp
+
+        Returns:
+            Response dict with status, event_id, run_id, commit_hash
+
+        Raises:
+            APIValidationError: Invalid commit data (400/422)
+            APIUnavailableError: API unreachable
+            APIError: Server error (404/500)
+        """
+        endpoint = f"{self.api_url}/api/v1/runs/{event_id}/associate-commit"
+
+        payload = {
+            "commit_hash": commit_hash,
+            "commit_source": commit_source,
+        }
+
+        if commit_author:
+            payload["commit_author"] = commit_author
+        if commit_timestamp:
+            payload["commit_timestamp"] = commit_timestamp
+
+        for attempt in range(self.max_retries):
+            try:
+                response = self.session.post(
+                    endpoint,
+                    json=payload,
+                    timeout=self.timeout
+                )
+
+                # Handle success (200)
+                if response.status_code == 200:
+                    result = response.json()
+                    logger.info(
+                        f"Commit {commit_hash} associated with {event_id}"
+                    )
+                    return result
+
+                # Handle not found (404)
+                elif response.status_code == 404:
+                    logger.error(f"Run not found: {event_id}")
+                    raise APIValidationError(f"Run not found: {event_id}")
+
+                # Handle validation errors (422)
+                elif response.status_code == 422:
+                    error_text = response.text
+                    logger.error(f"Validation failed: {error_text}")
+                    raise APIValidationError(f"Invalid commit data: {error_text}")
+
+                # Handle other errors
+                else:
+                    response.raise_for_status()
+
+            except requests.exceptions.ConnectionError as e:
+                if attempt < self.max_retries - 1:
+                    logger.warning(
+                        f"Connection error (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    time.sleep(self.retry_delay)
+                    continue
+                else:
+                    logger.error(f"API unavailable after {self.max_retries} attempts: {e}")
+                    raise APIUnavailableError(
+                        f"Cannot reach telemetry API at {endpoint}"
+                    ) from e
+
+            except requests.exceptions.Timeout as e:
+                if attempt < self.max_retries - 1:
+                    logger.warning(
+                        f"Timeout (attempt {attempt + 1}/{self.max_retries}): {e}"
+                    )
+                    time.sleep(self.retry_delay)
+                    continue
+                else:
+                    logger.error(f"API timeout after {self.max_retries} attempts: {e}")
+                    raise APIUnavailableError(
+                        f"Telemetry API timeout: {endpoint}"
+                    ) from e
+
+            except requests.exceptions.HTTPError as e:
+                logger.error(
+                    f"API HTTP error {e.response.status_code}: {e.response.text}"
+                )
+                raise APIError(f"API error: {e}") from e
+
+            except Exception as e:
+                logger.error(f"Unexpected error associating commit: {e}")
+                raise APIError(f"Unexpected API error: {e}") from e
+
+        # Should not reach here
+        raise APIUnavailableError(f"Failed to associate commit after {self.max_retries} attempts")
+
     def close(self):
         """Close the HTTP session."""
         self.session.close()

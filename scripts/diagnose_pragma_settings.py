@@ -108,14 +108,14 @@ def main():
         'busy_timeout': 30000,
         'journal_mode': 'delete',  # DELETE mode for Docker compatibility
         'synchronous': 2,
-        'wal_autocheckpoint': 1000  # Default when not using WAL
+        'wal_autocheckpoint': 100  # Only enforced when journal_mode=WAL
     }
 
     print("\nExpected production values (Docker-compatible):")
     print(f"  busy_timeout:       {expected['busy_timeout']} ms")
     print(f"  journal_mode:       {expected['journal_mode']} (Docker-compatible)")
     print(f"  synchronous:        {expected['synchronous']} (FULL) - CRITICAL for corruption prevention")
-    print(f"  wal_autocheckpoint: {expected['wal_autocheckpoint']} (N/A in DELETE mode)")
+    print(f"  wal_autocheckpoint: {expected['wal_autocheckpoint']} (only applies in WAL mode)")
 
     # Check for discrepancies
     discrepancies = []
@@ -129,6 +129,7 @@ def main():
             continue
 
         # Check DatabaseWriter and TelemetryClient
+        journal_mode = values.get('journal_mode', '').lower()
         for key, expected_val in expected.items():
             actual_val = values[key]
 
@@ -137,6 +138,14 @@ def main():
                 if actual_val.lower() != expected_val.lower():
                     discrepancies.append(
                         f"{method}: {key} is '{actual_val}', expected '{expected_val}'"
+                    )
+            elif key == 'wal_autocheckpoint':
+                if journal_mode != 'wal':
+                    # wal_autocheckpoint is not applicable in DELETE mode
+                    continue
+                if actual_val != expected_val:
+                    discrepancies.append(
+                        f"{method}: {key} is {actual_val}, expected {expected_val}"
                     )
             elif actual_val != expected_val:
                 discrepancies.append(
@@ -180,7 +189,7 @@ PRAGMAs correctly. If discrepancies still appear, check for:
         print("  - busy_timeout = 30000ms (handles concurrent access)")
         print("  - synchronous = FULL (prevents corruption on crashes)")
         print("  - journal_mode = DELETE (Docker-compatible, safe with synchronous=FULL)")
-        print("  - wal_autocheckpoint = 1000 (default, not used in DELETE mode)")
+        print("  - wal_autocheckpoint = 100 (only when WAL is enabled)")
 
         print_section("Previous Discrepancy Explanation")
         print("""
