@@ -738,6 +738,103 @@ async def get_metadata(
             )
 
 
+@app.get("/api/v1/runs/{event_id}")
+async def get_run_by_event_id(
+    event_id: str,
+    _rate_limit: None = Depends(check_rate_limit)
+):
+    """
+    Get a single run by event_id (direct fetch).
+
+    Args:
+        event_id: Unique event ID of the run
+        _rate_limit: Rate limiting dependency
+
+    Returns:
+        dict: Run object with all fields
+
+    Raises:
+        HTTPException: 404 if run not found, 500 for database errors
+    """
+    with track_duration() as get_duration:
+        try:
+            with get_db() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(
+                    "SELECT * FROM agent_runs WHERE event_id = ?",
+                    (event_id,)
+                )
+                row = cursor.fetchone()
+
+                if not row:
+                    log_error(
+                        f"/api/v1/runs/{event_id}",
+                        "NotFound",
+                        f"Run not found: {event_id}",
+                        event_id=event_id
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"Run not found: {event_id}"
+                    )
+
+                # Convert row to dict
+                columns = [description[0] for description in cursor.description]
+                run_dict = dict(zip(columns, row))
+
+                # Parse JSON fields
+                for json_field in ['metrics_json', 'context_json']:
+                    if run_dict.get(json_field):
+                        try:
+                            run_dict[json_field] = json.loads(run_dict[json_field])
+                        except (json.JSONDecodeError, TypeError) as e:
+                            log_error(
+                                f"/api/v1/runs/{event_id}",
+                                "JSONParseError",
+                                f"Failed to parse {json_field}",
+                                event_id=event_id,
+                                field=json_field,
+                                error=str(e)
+                            )
+                            run_dict[f'{json_field}_parse_error'] = str(e)
+
+                # Convert api_posted to bool
+                if 'api_posted' in run_dict:
+                    run_dict['api_posted'] = bool(run_dict['api_posted'])
+
+                # Add URL fields
+                git_repo = run_dict.get('git_repo')
+                git_commit_hash = run_dict.get('git_commit_hash')
+
+                if git_repo and git_commit_hash:
+                    run_dict['commit_url'] = build_commit_url(git_repo, git_commit_hash)
+                else:
+                    run_dict['commit_url'] = None
+
+                if git_repo:
+                    run_dict['repo_url'] = build_repo_url(git_repo)
+                else:
+                    run_dict['repo_url'] = None
+
+                logger.info(f"[OK] Fetched run by event_id: {event_id}")
+                return run_dict
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            log_error(
+                f"/api/v1/runs/{event_id}",
+                type(e).__name__,
+                str(e),
+                event_id=event_id
+            )
+            logger.error(f"[ERROR] Failed to fetch run {event_id}: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch run: {str(e)}"
+            )
+
+
 @app.get("/api/v1/runs")
 async def query_runs(
     request: Request,
@@ -1112,103 +1209,6 @@ async def update_run(
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to update run: {str(e)}"
-            )
-
-
-@app.get("/api/v1/runs/{event_id}")
-async def get_run_by_event_id(
-    event_id: str,
-    _rate_limit: None = Depends(check_rate_limit)
-):
-    """
-    Get a single run by event_id (direct fetch).
-
-    Args:
-        event_id: Unique event ID of the run
-        _rate_limit: Rate limiting dependency
-
-    Returns:
-        dict: Run object with all fields
-
-    Raises:
-        HTTPException: 404 if run not found, 500 for database errors
-    """
-    with track_duration() as get_duration:
-        try:
-            with get_db() as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.execute(
-                    "SELECT * FROM agent_runs WHERE event_id = ?",
-                    (event_id,)
-                )
-                row = cursor.fetchone()
-
-                if not row:
-                    log_error(
-                        f"/api/v1/runs/{event_id}",
-                        "NotFound",
-                        f"Run not found: {event_id}",
-                        event_id=event_id
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Run not found: {event_id}"
-                    )
-
-                # Convert row to dict
-                columns = [description[0] for description in cursor.description]
-                run_dict = dict(zip(columns, row))
-
-                # Parse JSON fields
-                for json_field in ['metrics_json', 'context_json']:
-                    if run_dict.get(json_field):
-                        try:
-                            run_dict[json_field] = json.loads(run_dict[json_field])
-                        except (json.JSONDecodeError, TypeError) as e:
-                            log_error(
-                                f"/api/v1/runs/{event_id}",
-                                "JSONParseError",
-                                f"Failed to parse {json_field}",
-                                event_id=event_id,
-                                field=json_field,
-                                error=str(e)
-                            )
-                            run_dict[f'{json_field}_parse_error'] = str(e)
-
-                # Convert api_posted to bool
-                if 'api_posted' in run_dict:
-                    run_dict['api_posted'] = bool(run_dict['api_posted'])
-
-                # Add URL fields
-                git_repo = run_dict.get('git_repo')
-                git_commit_hash = run_dict.get('git_commit_hash')
-
-                if git_repo and git_commit_hash:
-                    run_dict['commit_url'] = build_commit_url(git_repo, git_commit_hash)
-                else:
-                    run_dict['commit_url'] = None
-
-                if git_repo:
-                    run_dict['repo_url'] = build_repo_url(git_repo)
-                else:
-                    run_dict['repo_url'] = None
-
-                logger.info(f"[OK] Fetched run by event_id: {event_id}")
-                return run_dict
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            log_error(
-                f"/api/v1/runs/{event_id}",
-                type(e).__name__,
-                str(e),
-                event_id=event_id
-            )
-            logger.error(f"[ERROR] Failed to fetch run {event_id}: {e}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to fetch run: {str(e)}"
             )
 
 
