@@ -58,15 +58,19 @@ def verify_query_runs_endpoint(schema):
 
     Spec location: specs/features/http_query_runs.md
 
-    Expected params (from Phase 2 spec update):
+    Expected params (actual implementation):
     - agent_name (string, optional)
-    - status (string, optional)
+    - status (array of strings, optional)
     - job_type (string, optional)
+    - run_id_contains (string, optional)
+    - parent_run_id (string, optional)
+    - exclude_job_type (string, optional)
+    - created_before (string, optional)
+    - created_after (string, optional)
+    - start_time_from (string, optional)
+    - start_time_to (string, optional)
     - limit (integer, default 100, constraints 1-1000)
     - offset (integer, default 0, minimum 0)
-
-    NOT expected (removed in Phase 2):
-    - created_before, created_after, start_time_from, start_time_to
     """
     print("\n" + "=" * 70)
     print("Checking: GET /api/v1/runs")
@@ -85,8 +89,15 @@ def verify_query_runs_endpoint(schema):
     # Check expected parameters
     expected = {
         "agent_name": {"type": "string", "required": False},
-        "status": {"type": "string", "required": False},
+        "status": {"type": "array", "required": False},
         "job_type": {"type": "string", "required": False},
+        "run_id_contains": {"type": "string", "required": False},
+        "parent_run_id": {"type": "string", "required": False},
+        "exclude_job_type": {"type": "string", "required": False},
+        "created_before": {"type": "string", "required": False},
+        "created_after": {"type": "string", "required": False},
+        "start_time_from": {"type": "string", "required": False},
+        "start_time_to": {"type": "string", "required": False},
         "limit": {"type": "integer", "required": False},
         "offset": {"type": "integer", "required": False},
     }
@@ -120,11 +131,7 @@ def verify_query_runs_endpoint(schema):
         if offset_schema.get("minimum") != 0:
             issues.append(f"offset: expected minimum=0, got {offset_schema.get('minimum')}")
 
-    # Check for parameters that should NOT exist (removed in Phase 2)
-    removed_params = ["created_before", "created_after", "start_time_from", "start_time_to"]
-    for param_name in removed_params:
-        if param_name in params:
-            issues.append(f"Unexpected parameter (should be removed): {param_name}")
+    # No parameters to check for removal - all are intentionally implemented
 
     # Report results
     if issues:
@@ -135,8 +142,15 @@ def verify_query_runs_endpoint(schema):
     else:
         print("[OK] All parameters match spec")
         print(f"  - agent_name: optional string")
-        print(f"  - status: optional string (normalized)")
+        print(f"  - status: optional array (supports multiple statuses, normalized)")
         print(f"  - job_type: optional string")
+        print(f"  - run_id_contains: optional string")
+        print(f"  - parent_run_id: optional string")
+        print(f"  - exclude_job_type: optional string")
+        print(f"  - created_before: optional string (ISO8601 timestamp)")
+        print(f"  - created_after: optional string (ISO8601 timestamp)")
+        print(f"  - start_time_from: optional string (ISO8601 timestamp)")
+        print(f"  - start_time_to: optional string (ISO8601 timestamp)")
         print(f"  - limit: optional integer (1-1000, default 100)")
         print(f"  - offset: optional integer (>=0, default 0)")
         return True
@@ -194,7 +208,7 @@ def verify_status_aliases(schema):
         print("[FAIL] specs/_index.md not found")
         return False
 
-    content = spec_index.read_text()
+    content = spec_index.read_text(encoding='utf-8')
 
     # Check for status aliases
     required_terms = [
@@ -216,9 +230,9 @@ def verify_status_aliases(schema):
         return False
 
     print("[OK] Status aliases documented in specs/_index.md")
-    print("  - failed → failure")
-    print("  - completed → success")
-    print("  - succeeded → success")
+    print("  - failed -> failure")
+    print("  - completed -> success")
+    print("  - succeeded -> success")
 
     return True
 
@@ -237,7 +251,7 @@ def verify_http_query_runs_spec(schema):
         print("[FAIL] specs/features/http_query_runs.md not found")
         return False
 
-    content = spec_file.read_text()
+    content = spec_file.read_text(encoding='utf-8')
 
     # Check that date/time filters are marked as NOT IMPLEMENTED
     if "created_before" in content and "NOT YET IMPLEMENTED" not in content:
@@ -307,10 +321,10 @@ def main():
     print(f"Passed: {passed_count}/{total_count}")
 
     if passed_count == total_count:
-        print("\n✓ All spec consistency checks passed")
+        print("\n[OK] All spec consistency checks passed")
         return 0
     else:
-        print(f"\n✗ {total_count - passed_count} check(s) failed")
+        print(f"\n[FAIL] {total_count - passed_count} check(s) failed")
         return 1
 
 
