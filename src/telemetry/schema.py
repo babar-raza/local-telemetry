@@ -511,7 +511,9 @@ def ensure_schema(db_path: str, backup_on_drift: bool = True) -> Tuple[bool, lis
         messages.append(f"[FAIL] Database error: {e}")
         return False, messages
     except Exception as e:
+        import traceback
         messages.append(f"[FAIL] Unexpected error: {e}")
+        messages.append(f"[DEBUG] Traceback: {traceback.format_exc()}")
         return False, messages
 
 
