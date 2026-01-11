@@ -1,0 +1,7 @@
+[1m============================= test session starts =============================[0m
+collected 0 items / 1 error
+
+[36m[1m=========================== short test summary info ===========================[0m
+[31mERROR[0m tests/contract - Failed: Defining 'pytest_plugins' in a non-top-level conftest is no longer ...
+[31m!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!![0m
+[31m============================== [31m[1m1 error[0m[31m in 0.10s[0m[31m ===============================[0m

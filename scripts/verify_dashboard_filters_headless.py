@@ -1,132 +1,86 @@
 #!/usr/bin/env python3
 """
-Automated Dashboard Filter Verification Harness.
+Automated Dashboard Filter Verification Harness
 
-Starts an isolated telemetry API instance, seeds deterministic data, and verifies
-filter correctness and event fetching without manual UI interaction.
+Programmatically tests the telemetry API filter endpoints to verify:
+1. Status filter correctness (especially 'failure' vs 'failed')
+2. Multi-status filtering (OR semantics)
+3. job_type server-side filtering
+4. Event ID direct fetch capability
+5. Run ID collision prevention
+
+NO MANUAL UI INTERACTION REQUIRED - fully automated.
+
+Usage:
+    python scripts/verify_dashboard_filters_headless.py
+
+Exit Codes:
+    0 - All tests passed
+    1 - One or more tests failed
 """
 
 import os
 import sys
+import json
 import time
 import uuid
-import json
-import socket
-import shutil
-import signal
-import subprocess
+import requests
 from datetime import datetime, timezone, timedelta
+from typing import List, Dict, Any
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Tuple
 
-try:
-    import requests
-    HAS_REQUESTS = True
-except ImportError:
-    HAS_REQUESTS = False
+# Configuration
+API_BASE_URL = os.getenv("TELEMETRY_API_URL", "http://localhost:8765")
+TEMP_DB_PATH = Path(os.getenv("TEMP", "/tmp")) / f"telemetry_test_{uuid.uuid4().hex[:8]}.sqlite"
 
-
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_TIMEOUT = 5
+# Test results tracking
+tests_passed = 0
+tests_failed = 0
+failures = []
 
 
-class HarnessError(Exception):
-    pass
-
-
-def log(message: str, level: str = "INFO") -> None:
+def log(message: str, level: str = "INFO"):
+    """Log message with timestamp."""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] [{level}] {message}")
 
 
-def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((DEFAULT_HOST, 0))
-        return sock.getsockname()[1]
+def test_result(test_name: str, passed: bool, details: str = ""):
+    """Record test result."""
+    global tests_passed, tests_failed, failures
+
+    if passed:
+        tests_passed += 1
+        log(f"✓ PASS: {test_name}", "PASS")
+    else:
+        tests_failed += 1
+        failures.append(f"{test_name}: {details}")
+        log(f"✗ FAIL: {test_name} - {details}", "FAIL")
 
 
-def build_temp_paths() -> Tuple[Path, Path]:
-    temp_root = Path(os.getenv("TEMP", "/tmp"))
-    db_path = temp_root / f"telemetry_test_{uuid.uuid4().hex[:8]}.sqlite"
-    lock_path = db_path.with_suffix(".lock")
-    return db_path, lock_path
+def wait_for_api(max_attempts: int = 30, delay: float = 1.0) -> bool:
+    """Wait for API to become available."""
+    log(f"Waiting for API at {API_BASE_URL}...")
 
-
-def start_api(db_path: Path, lock_path: Path, port: int) -> subprocess.Popen:
-    env = os.environ.copy()
-    env["TELEMETRY_DB_PATH"] = str(db_path)
-    env["TELEMETRY_LOCK_FILE"] = str(lock_path)
-    env["TELEMETRY_API_HOST"] = DEFAULT_HOST
-    env["TELEMETRY_API_PORT"] = str(port)
-    env["TELEMETRY_DB_JOURNAL_MODE"] = "DELETE"
-    env["TELEMETRY_DB_SYNCHRONOUS"] = "FULL"
-
-    log(f"Starting API on {DEFAULT_HOST}:{port} with db={db_path}")
-    return subprocess.Popen(
-        [sys.executable, "telemetry_service.py"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-    )
-
-
-def stop_api(proc: subprocess.Popen) -> None:
-    if proc.poll() is not None:
-        return
-    log("Stopping API process")
-    proc.terminate()
-    try:
-        proc.wait(timeout=10)
-    except subprocess.TimeoutExpired:
-        log("API did not stop in time, killing process", "WARN")
-        proc.kill()
-
-
-def wait_for_api(base_url: str, proc: subprocess.Popen, max_attempts: int = 30) -> None:
     for attempt in range(max_attempts):
-        if proc.poll() is not None:
-            output = proc.stdout.read() if proc.stdout else ""
-            raise HarnessError(f"API process exited early. Output:\n{output}")
         try:
-            response = requests.get(f"{base_url}/health", timeout=DEFAULT_TIMEOUT)
+            response = requests.get(f"{API_BASE_URL}/health", timeout=2)
             if response.status_code == 200:
-                log(f"API is ready (attempt {attempt + 1}/{max_attempts})")
-                return
-        except requests.RequestException:
-            time.sleep(1)
-    raise HarnessError("API did not become ready in time")
+                log(f"✓ API is ready (attempt {attempt + 1}/{max_attempts})")
+                return True
+        except requests.exceptions.RequestException:
+            if attempt < max_attempts - 1:
+                time.sleep(delay)
+
+    log("✗ API did not become available", "ERROR")
+    return False
 
 
-def create_test_run(base_url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    response = requests.post(f"{base_url}/api/v1/runs", json=payload, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
-    return response.json()
-
-
-def query_runs(base_url: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    response = requests.get(f"{base_url}/api/v1/runs", params=params or {}, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
-    return response.json()
-
-
-def fetch_run(base_url: str, event_id: str) -> Dict[str, Any]:
-    response = requests.get(f"{base_url}/api/v1/runs/{event_id}", timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
-    return response.json()
-
-
-def make_payload(
-    event_id: str,
-    run_id: str,
-    agent_name: str,
-    status: str,
-    job_type: str,
-    parent_run_id: Optional[str] = None,
-) -> Dict[str, Any]:
+def create_test_run(event_id: str, agent_name: str, status: str, job_type: str, parent_run_id: str = None) -> Dict[str, Any]:
+    """Create a test telemetry run."""
     payload = {
         "event_id": event_id,
-        "run_id": run_id,
+        "run_id": f"run-{event_id[:8]}",
         "agent_name": agent_name,
         "job_type": job_type,
         "status": status,
@@ -138,164 +92,335 @@ def make_payload(
         "items_failed": 5,
         "items_skipped": 0,
     }
+
     if parent_run_id:
         payload["parent_run_id"] = parent_run_id
-    return payload
+
+    response = requests.post(f"{API_BASE_URL}/api/v1/runs", json=payload)
+    response.raise_for_status()
+    return response.json()
 
 
-def seed_dataset(base_url: str) -> Dict[str, Any]:
-    seed = {}
+def query_runs(**filters) -> List[Dict[str, Any]]:
+    """Query runs with filters."""
+    response = requests.get(f"{API_BASE_URL}/api/v1/runs", params=filters)
+    response.raise_for_status()
+    return response.json()
 
-    parent_event = str(uuid.uuid4())
-    parent_run_id = f"run-parent-{parent_event[:8]}"
-    create_test_run(
-        base_url,
-        make_payload(parent_event, parent_run_id, "agent-alpha", "running", "analysis"),
-    )
 
-    alias_cases = [
-        ("failed", "failure"),
-        ("failure", "failure"),
-        ("completed", "success"),
-        ("success", "success"),
-        ("succeeded", "success"),
+def test_status_enum_correctness():
+    """Test 1: Verify API accepts canonical status values."""
+    log("TEST: Status enum correctness (canonical values)")
+
+    canonical_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
+    wrong_status = 'failed'  # Common mistake
+
+    # Test canonical values
+    for status in canonical_statuses:
+        try:
+            event_id = str(uuid.uuid4())
+            result = create_test_run(event_id, "test-agent", status, "test")
+            test_result(f"Status '{status}' accepted", True)
+        except Exception as e:
+            test_result(f"Status '{status}' accepted", False, str(e))
+
+    # Test wrong value should be rejected
+    try:
+        event_id = str(uuid.uuid4())
+        result = create_test_run(event_id, "test-agent", wrong_status, "test")
+        # Should have failed validation
+        test_result(f"Status '{wrong_status}' rejected", False, "API accepted invalid status")
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 400:
+            test_result(f"Status '{wrong_status}' rejected", True)
+        else:
+            test_result(f"Status '{wrong_status}' rejected", False, f"Wrong error code: {e.response.status_code}")
+    except Exception as e:
+        test_result(f"Status '{wrong_status}' rejected", False, str(e))
+
+
+def test_status_query_filter():
+    """Test 2: Verify status filter returns correct records."""
+    log("TEST: Status filter query")
+
+    # Create runs with different statuses
+    agent = "filter-test-agent"
+    test_data = [
+        (str(uuid.uuid4()), "success"),
+        (str(uuid.uuid4()), "failure"),
+        (str(uuid.uuid4()), "partial"),
     ]
 
-    alias_event_ids = []
-    for status, _canonical in alias_cases:
-        event_id = str(uuid.uuid4())
-        alias_event_ids.append(event_id)
-        create_test_run(
-            base_url,
-            make_payload(event_id, f"run-{event_id[:8]}", "agent-alpha", status, "batch"),
-        )
+    for event_id, status in test_data:
+        create_test_run(event_id, agent, status, "query-test")
 
-    child_event = str(uuid.uuid4())
-    child_run_id = f"run-child-{child_event[:8]}"
-    create_test_run(
-        base_url,
-        make_payload(child_event, child_run_id, "agent-beta", "success", "sync", parent_run_id=parent_run_id),
-    )
+    # Query for each status
+    for expected_status in ["success", "failure", "partial"]:
+        try:
+            results = query_runs(agent_name=agent, status=expected_status)
+            statuses_found = {r['status'] for r in results}
 
-    test_job_event = str(uuid.uuid4())
-    create_test_run(
-        base_url,
-        make_payload(test_job_event, f"run-test-{test_job_event[:8]}", "agent-beta", "success", "test"),
-    )
-
-    seed["parent_event"] = parent_event
-    seed["parent_run_id"] = parent_run_id
-    seed["child_event"] = child_event
-    seed["child_run_id"] = child_run_id
-    seed["alias_event_ids"] = alias_event_ids
-    seed["alias_cases"] = alias_cases
-    seed["test_job_event"] = test_job_event
-
-    return seed
+            if expected_status in statuses_found and len(statuses_found) == 1:
+                test_result(f"Query status={expected_status}", True)
+            else:
+                test_result(f"Query status={expected_status}", False,
+                           f"Expected {expected_status}, got {statuses_found}")
+        except Exception as e:
+            test_result(f"Query status={expected_status}", False, str(e))
 
 
-def assert_true(condition: bool, message: str) -> None:
-    if not condition:
-        raise HarnessError(message)
+def test_job_type_server_filter():
+    """Test 3: Verify job_type is filtered server-side."""
+    log("TEST: Server-side job_type filtering")
 
+    agent = "job-type-test-agent"
 
-def test_alias_normalization(base_url: str, seed: Dict[str, Any]) -> None:
-    for event_id, (raw_status, canonical) in zip(seed["alias_event_ids"], seed["alias_cases"]):
-        run = fetch_run(base_url, event_id)
-        actual = run.get("status")
-        assert_true(
-            actual == canonical,
-            f"Alias normalization failed for status '{raw_status}': got '{actual}', expected '{canonical}'",
-        )
+    # Create runs with different job types
+    job_types_data = [
+        (str(uuid.uuid4()), "analysis"),
+        (str(uuid.uuid4()), "test"),
+        (str(uuid.uuid4()), "sync"),
+    ]
 
+    for event_id, job_type in job_types_data:
+        create_test_run(event_id, agent, "success", job_type)
 
-def test_multi_status_filter(base_url: str) -> None:
-    params = [("status", "success"), ("status", "failure")]
-    response = requests.get(f"{base_url}/api/v1/runs", params=params, timeout=DEFAULT_TIMEOUT)
-    response.raise_for_status()
-    results = response.json()
-    statuses = {r.get("status") for r in results}
-    assert_true(statuses.issubset({"success", "failure"}), f"Unexpected statuses in multi-status filter: {statuses}")
-
-
-def test_job_type_filter(base_url: str) -> None:
-    results = query_runs(base_url, {"job_type": "sync"})
-    assert_true(results, "Expected job_type=sync results")
-    job_types = {r.get("job_type") for r in results}
-    assert_true(job_types == {"sync"}, f"Job type filter returned {job_types}")
-
-
-def test_parent_run_filter(base_url: str, seed: Dict[str, Any]) -> None:
-    results = query_runs(base_url, {"parent_run_id": seed["parent_run_id"]})
-    assert_true(results, "Expected parent_run_id filter results")
-    parent_ids = {r.get("parent_run_id") for r in results}
-    assert_true(parent_ids == {seed["parent_run_id"]}, f"parent_run_id filter returned {parent_ids}")
-
-
-def test_run_id_contains_filter(base_url: str, seed: Dict[str, Any]) -> None:
-    fragment = seed["child_run_id"].split("-")[-1]
-    results = query_runs(base_url, {"run_id_contains": fragment})
-    assert_true(results, "Expected run_id_contains results")
-    run_ids = {r.get("run_id") for r in results}
-    assert_true(seed["child_run_id"] in run_ids, f"run_id_contains did not include {seed['child_run_id']}")
-
-
-def test_exclude_job_type(base_url: str) -> None:
-    results = query_runs(base_url, {"exclude_job_type": "test"})
-    job_types = {r.get("job_type") for r in results}
-    assert_true("test" not in job_types, f"exclude_job_type still returned {job_types}")
-
-
-def test_event_id_fetch(base_url: str, seed: Dict[str, Any]) -> None:
-    run = fetch_run(base_url, seed["child_event"])
-    assert_true(run.get("event_id") == seed["child_event"], "Event_id fetch returned wrong run")
-
-
-def run_tests(base_url: str, seed: Dict[str, Any]) -> None:
-    test_alias_normalization(base_url, seed)
-    test_multi_status_filter(base_url)
-    test_job_type_filter(base_url)
-    test_parent_run_filter(base_url, seed)
-    test_run_id_contains_filter(base_url, seed)
-    test_exclude_job_type(base_url)
-    test_event_id_fetch(base_url, seed)
-
-
-def main() -> int:
-    if not HAS_REQUESTS:
-        log("requests module required. Install with: pip install requests", "ERROR")
-        return 1
-
-    db_path, lock_path = build_temp_paths()
-    port = find_free_port()
-    base_url = f"http://{DEFAULT_HOST}:{port}"
-
-    proc = start_api(db_path, lock_path, port)
+    # Query for specific job_type
     try:
-        wait_for_api(base_url, proc)
-        seed = seed_dataset(base_url)
-        run_tests(base_url, seed)
-        log("All headless dashboard filter tests passed", "PASS")
+        results = query_runs(agent_name=agent, job_type="analysis")
+        job_types_found = {r['job_type'] for r in results}
+
+        if job_types_found == {"analysis"}:
+            test_result("Server-side job_type filter", True)
+        else:
+            test_result("Server-side job_type filter", False,
+                       f"Expected {{analysis}}, got {job_types_found}")
+    except Exception as e:
+        test_result("Server-side job_type filter", False, str(e))
+
+
+def test_event_id_direct_fetch():
+    """Test 4: Verify direct event_id fetch endpoint exists."""
+    log("TEST: Direct event_id fetch endpoint")
+
+    # Create a test run
+    event_id = str(uuid.uuid4())
+    agent = "direct-fetch-agent"
+    create_test_run(event_id, agent, "success", "test")
+
+    # Try direct fetch via GET /api/v1/runs/{event_id}
+    try:
+        response = requests.get(f"{API_BASE_URL}/api/v1/runs/{event_id}")
+
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('event_id') == event_id:
+                test_result("Direct event_id fetch endpoint", True)
+            else:
+                test_result("Direct event_id fetch endpoint", False,
+                           f"Returned wrong event_id: {data.get('event_id')}")
+        elif response.status_code == 404:
+            test_result("Direct event_id fetch endpoint", False,
+                       "Endpoint exists but run not found (possible race condition)")
+        else:
+            test_result("Direct event_id fetch endpoint", False,
+                       f"Unexpected status code: {response.status_code}")
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            test_result("Direct event_id fetch endpoint", False,
+                       "Endpoint not implemented (404 Not Found)")
+        else:
+            test_result("Direct event_id fetch endpoint", False, str(e))
+    except Exception as e:
+        test_result("Direct event_id fetch endpoint", False, str(e))
+
+
+def test_run_id_collision_prevention():
+    """Test 5: Verify run selection uses event_id (not run_id) as key."""
+    log("TEST: Run ID collision prevention")
+
+    # Create two runs with same run_id but different event_ids
+    run_id_shared = f"shared-run-{uuid.uuid4().hex[:8]}"
+    event_id_1 = str(uuid.uuid4())
+    event_id_2 = str(uuid.uuid4())
+
+    # Create first run
+    payload_1 = {
+        "event_id": event_id_1,
+        "run_id": run_id_shared,  # Same run_id
+        "agent_name": "collision-test",
+        "job_type": "test",
+        "status": "success",
+        "start_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+    # Create second run with same run_id
+    payload_2 = {
+        "event_id": event_id_2,
+        "run_id": run_id_shared,  # Same run_id
+        "agent_name": "collision-test",
+        "job_type": "test",
+        "status": "failure",
+        "start_time": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        requests.post(f"{API_BASE_URL}/api/v1/runs", json=payload_1).raise_for_status()
+        requests.post(f"{API_BASE_URL}/api/v1/runs", json=payload_2).raise_for_status()
+
+        # Query both runs
+        results = query_runs(agent_name="collision-test", limit=10)
+
+        # Check we can distinguish by event_id
+        event_ids_found = {r['event_id'] for r in results}
+
+        if event_id_1 in event_ids_found and event_id_2 in event_ids_found:
+            test_result("Run ID collision prevention", True)
+        else:
+            test_result("Run ID collision prevention", False,
+                       f"Expected both event_ids, got {event_ids_found}")
+
+    except Exception as e:
+        test_result("Run ID collision prevention", False, str(e))
+
+
+def test_date_filter_inclusive():
+    """Test 6: Verify date filters are inclusive."""
+    log("TEST: Date filter inclusiveness")
+
+    agent = "date-filter-agent"
+
+    # Create runs at specific times
+    now = datetime.now(timezone.utc)
+    times = [
+        now - timedelta(days=2),
+        now - timedelta(days=1),
+        now,
+    ]
+
+    event_ids = []
+    for t in times:
+        event_id = str(uuid.uuid4())
+        event_ids.append(event_id)
+
+        payload = {
+            "event_id": event_id,
+            "run_id": f"run-{event_id[:8]}",
+            "agent_name": agent,
+            "job_type": "date-test",
+            "status": "success",
+            "start_time": t.isoformat(),
+        }
+        requests.post(f"{API_BASE_URL}/api/v1/runs", json=payload).raise_for_status()
+
+    # Query with date range
+    try:
+        start_date = (now - timedelta(days=1.5)).isoformat()
+        end_date = now.isoformat()
+
+        results = query_runs(
+            agent_name=agent,
+            start_time_from=start_date,
+            start_time_to=end_date
+        )
+
+        found_event_ids = {r['event_id'] for r in results}
+
+        # Should include runs from last 2 days
+        if event_ids[1] in found_event_ids and event_ids[2] in found_event_ids:
+            test_result("Date filter inclusive", True)
+        else:
+            test_result("Date filter inclusive", False,
+                       f"Expected {event_ids[1:]} in {found_event_ids}")
+
+    except Exception as e:
+        test_result("Date filter inclusive", False, str(e))
+
+
+def test_parent_child_hierarchy():
+    """Test 7: Verify parent_run_id relationships work."""
+    log("TEST: Parent-child run hierarchy")
+
+    parent_event_id = str(uuid.uuid4())
+    parent_run_id = f"run-{parent_event_id[:8]}"
+    child_event_id = str(uuid.uuid4())
+
+    # Create parent run
+    create_test_run(parent_event_id, "parent-agent", "success", "parent-job")
+
+    # Create child run
+    create_test_run(child_event_id, "child-agent", "success", "child-job", parent_run_id=parent_run_id)
+
+    try:
+        # Query all runs and check parent_run_id
+        results = query_runs(limit=1000)
+        child_run = next((r for r in results if r['event_id'] == child_event_id), None)
+
+        if child_run and child_run.get('parent_run_id') == parent_run_id:
+            test_result("Parent-child hierarchy", True)
+        else:
+            test_result("Parent-child hierarchy", False,
+                       f"parent_run_id not set correctly: {child_run.get('parent_run_id') if child_run else 'run not found'}")
+
+    except Exception as e:
+        test_result("Parent-child hierarchy", False, str(e))
+
+
+def print_summary():
+    """Print test summary."""
+    log("")
+    log("=" * 70)
+    log("TEST SUMMARY")
+    log("=" * 70)
+    log(f"Total Tests: {tests_passed + tests_failed}")
+    log(f"Passed: {tests_passed}")
+    log(f"Failed: {tests_failed}")
+
+    if failures:
+        log("")
+        log("FAILURES:")
+        for failure in failures:
+            log(f"  - {failure}")
+
+    log("=" * 70)
+
+    if tests_failed == 0:
+        log("✓ ALL TESTS PASSED", "SUCCESS")
         return 0
-    except Exception as exc:
-        log(f"Headless dashboard filter tests failed: {exc}", "FAIL")
+    else:
+        log(f"✗ {tests_failed} TEST(S) FAILED", "FAIL")
         return 1
-    finally:
-        stop_api(proc)
-        if db_path.exists():
-            try:
-                shutil.copy2(db_path, db_path.with_suffix(".seeded.sqlite"))
-            except Exception:
-                pass
-            try:
-                db_path.unlink()
-            except Exception:
-                pass
-        if lock_path.exists():
-            try:
-                lock_path.unlink()
-            except Exception:
-                pass
+
+
+def main():
+    """Main test execution."""
+    log("Dashboard Filter Verification Harness - Starting")
+    log(f"API URL: {API_BASE_URL}")
+
+    # Check if API is available
+    if not wait_for_api():
+        log("Cannot connect to API. Is the service running?", "ERROR")
+        log(f"Try: python telemetry_service.py", "ERROR")
+        return 1
+
+    # Run tests
+    try:
+        test_status_enum_correctness()
+        test_status_query_filter()
+        test_job_type_server_filter()
+        test_event_id_direct_fetch()
+        test_run_id_collision_prevention()
+        test_date_filter_inclusive()
+        test_parent_child_hierarchy()
+
+    except Exception as e:
+        log(f"Unhandled exception during tests: {e}", "ERROR")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+    return print_summary()
 
 
 if __name__ == "__main__":
