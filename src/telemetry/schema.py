@@ -494,7 +494,8 @@ def ensure_schema(db_path: str, backup_on_drift: bool = True) -> Tuple[bool, lis
 
         # Record schema version if needed
         cursor.execute("SELECT MAX(version) FROM schema_migrations")
-        current_version = cursor.fetchone()[0] or 0
+        result = cursor.fetchone()
+        current_version = result[0] if result and result[0] is not None else 0
         if current_version < SCHEMA_VERSION:
             cursor.execute(
                 "INSERT INTO schema_migrations (version, description) VALUES (?, ?)",
