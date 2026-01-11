@@ -46,23 +46,10 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     updated_at TEXT DEFAULT (datetime('now')),
     start_time TEXT NOT NULL,
     end_time TEXT,
-<<<<<<< Updated upstream
-    status TEXT CHECK(status IN ('running', 'success', 'failed', 'partial', 'timeout', 'cancelled')),
-    items_discovered INTEGER DEFAULT 0,
-    items_succeeded INTEGER DEFAULT 0,
-    items_failed INTEGER DEFAULT 0,
-    duration_ms INTEGER,
-    input_summary TEXT,
-    output_summary TEXT,
-    error_summary TEXT,
-    metrics_json TEXT,
-    insight_id TEXT,
-=======
     agent_name TEXT NOT NULL,
     agent_owner TEXT,
     job_type TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'running',
->>>>>>> Stashed changes
     product TEXT,
     product_family TEXT,
     platform TEXT,
