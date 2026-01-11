@@ -56,12 +56,9 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 from telemetry.config import TelemetryAPIConfig
 from telemetry.single_writer_guard import SingleWriterGuard
 from telemetry.logger import log_query, log_update, log_error, track_duration
-<<<<<<< Updated upstream
-=======
 from telemetry.url_builder import build_commit_url, build_repo_url
 from telemetry.schema import ensure_schema as ensure_telemetry_schema
 from telemetry.status import CANONICAL_STATUSES, normalize_status, normalize_status_list
->>>>>>> Stashed changes
 
 # Configure logging
 logging.basicConfig(
@@ -512,8 +509,6 @@ async def create_run(
         HTTPException: If validation fails or database error occurs
     """
     try:
-<<<<<<< Updated upstream
-=======
         normalized_status = normalize_status(run.status)
         if normalized_status not in CANONICAL_STATUSES:
             log_error(
@@ -527,7 +522,6 @@ async def create_run(
                 detail=f"Invalid status. Must be one of: {CANONICAL_STATUSES}"
             )
 
->>>>>>> Stashed changes
         with get_db() as conn:
             conn.execute("""
                 INSERT INTO agent_runs (
@@ -650,17 +644,6 @@ async def query_runs(
         HTTPException: 400 if validation fails, 500 for database errors
     """
     with track_duration() as get_duration:
-<<<<<<< Updated upstream
-        # Validate status if provided
-        if status:
-            allowed_statuses = ['running', 'success', 'failure', 'partial', 'timeout', 'cancelled']
-            if status not in allowed_statuses:
-                log_error("/api/v1/runs", "ValidationError", f"Invalid status: {status}", status=status)
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Invalid status. Must be one of: {allowed_statuses}"
-                )
-=======
         # Normalize status values (supports aliases and multi-status queries)
         normalized_statuses: List[str] = []
         if status:
@@ -682,7 +665,6 @@ async def query_runs(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid status. Must be one of: {CANONICAL_STATUSES}"
             )
->>>>>>> Stashed changes
 
         # Validate timestamps if provided
         for ts_name, ts_value in [
@@ -714,16 +696,10 @@ async def query_runs(
                     query += " AND agent_name = ?"
                     params.append(agent_name)
 
-<<<<<<< Updated upstream
-                if status:
-                    query += " AND status = ?"
-                    params.append(status)
-=======
                 if normalized_statuses:
                     placeholders = ", ".join(["?"] * len(normalized_statuses))
                     query += f" AND status IN ({placeholders})"
                     params.extend(normalized_statuses)
->>>>>>> Stashed changes
 
                 if job_type:
                     query += " AND job_type = ?"
