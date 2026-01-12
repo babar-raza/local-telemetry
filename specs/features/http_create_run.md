@@ -4,7 +4,10 @@
 **Category:** HTTP API
 **Route:** `POST /api/v1/runs`
 **Status:** VERIFIED (evidence-backed)
-**Last Updated:** 2025-12-26
+**Version:** 2.1.0
+**Last Updated:** 2026-01-11
+
+**IMPORTANT:** Line number references updated for commit `8c74f69` (2026-01-11) which reordered routes.
 
 ---
 
@@ -33,10 +36,10 @@ async def create_run(
 )
 ```
 
-**Evidence:** `telemetry_service.py:496-502`
+**Evidence:** `telemetry_service.py:586-592`
 
 ### Handler Function
-**File:** `telemetry_service.py:496-595`
+**File:** `telemetry_service.py:586-690`
 **Function:** `create_run()`
 
 ---

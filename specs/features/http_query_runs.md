@@ -4,8 +4,10 @@
 **Category:** HTTP API
 **Route:** `GET /api/v1/runs`
 **Status:** VERIFIED (evidence-backed)
-**Version:** 2.1.0 (added in v2.1.0)
-**Last Updated:** 2025-12-26
+**Version:** 2.1.0
+**Last Updated:** 2026-01-11
+
+**IMPORTANT:** Line number references updated for commit `8c74f69` (2026-01-11) which reordered routes. Some internal line numbers may be approximate and should be verified against current code.
 
 ---
 
@@ -28,20 +30,28 @@ Query telemetry runs with filtering, pagination, and sorting support. This endpo
 ```python
 @app.get("/api/v1/runs")
 async def query_runs(
-    agent_name: Optional[str] = Query(None, description="Filter by agent name"),
-    status: Optional[str] = Query(None, description="Filter by status"),
-    job_type: Optional[str] = Query(None, description="Filter by job type"),
-    limit: int = Query(100, ge=1, le=1000, description="Max results"),
-    offset: int = Query(0, ge=0, description="Result offset"),
+    request: Request,
+    agent_name: Optional[str] = None,
+    status: Optional[str] = None,
+    job_type: Optional[str] = None,
+    created_before: Optional[str] = None,
+    created_after: Optional[str] = None,
+    start_time_from: Optional[str] = None,
+    start_time_to: Optional[str] = None,
+    limit: int = Query(default=100, le=1000, ge=1),
+    offset: int = Query(default=0, ge=0),
+    _rate_limit: None = Depends(check_rate_limit)
 )
 ```
 
-**Evidence:** `telemetry_service.py:540-546`
+**Evidence:** `telemetry_service.py:838-851`
 
-**NOTE:** Date/time filters (created_before, created_after, start_time_from, start_time_to) are NOT YET IMPLEMENTED in v1.0.0.
+**NOTE:** This route MUST be registered AFTER `GET /api/v1/runs/{event_id}` (line 741) for FastAPI path matching to work correctly. FastAPI matches routes in registration order, so specific routes with path parameters must come before general routes.
+
+**Date/Time Filters:** All date/time filters (created_before, created_after, start_time_from, start_time_to) are now IMPLEMENTED.
 
 ### Handler Function
-**File:** `telemetry_service.py:598-763`
+**File:** `telemetry_service.py:838-1022`
 **Function:** `query_runs()`
 
 ---
@@ -91,7 +101,7 @@ GET /api/v1/runs?agent_name=hugo-translator&status=running&created_before=2025-1
 | `limit` | int | 100 | 1-1000 | Max results to return | Line 544 |
 | `offset` | int | 0 | >= 0 | Pagination offset | Line 545 |
 
-**Evidence:** `telemetry_service.py:540-546`
+**Evidence:** `telemetry_service.py:838-851`
 
 ---
 

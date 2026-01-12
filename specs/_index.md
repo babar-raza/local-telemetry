@@ -2,8 +2,8 @@
 
 **Version:** 2.1.0
 **Schema Version:** 6
-**Last Updated:** 2025-12-26
-**Status:** Initial spec mining complete
+**Last Updated:** 2026-01-11
+**Status:** Core endpoints documented, route ordering fixed (commit 8c74f69)
 
 ---
 
@@ -75,10 +75,15 @@ Enable autonomous agents to instrument their execution with telemetry that:
 
 ### HTTP API Service
 
-- [Create Run](features/http_create_run.md) - POST /api/v1/runs
-- [Query Runs](features/http_query_runs.md) - GET /api/v1/runs
+- [Create Run](features/http_create_run.md) - POST /api/v1/runs ✓
+- [Get Run by Event ID](features/http_get_run.md) - GET /api/v1/runs/{event_id} ✓ (NEW)
+- [Query Runs](features/http_query_runs.md) - GET /api/v1/runs ✓
 - [Update Run](features/http_update_run.md) - PATCH /api/v1/runs/{event_id}
 - [Batch Create](features/http_batch_create.md) - POST /api/v1/runs/batch
+- [Get Metadata](features/http_metadata.md) - GET /api/v1/metadata
+- [Associate Commit](features/http_associate_commit.md) - POST /api/v1/runs/{event_id}/associate-commit
+- [Get Commit URL](features/http_commit_url.md) - GET /api/v1/runs/{event_id}/commit-url
+- [Get Repo URL](features/http_repo_url.md) - GET /api/v1/runs/{event_id}/repo-url
 - [Health Check](features/http_health_check.md) - GET /health
 - [System Metrics](features/http_system_metrics.md) - GET /metrics
 
@@ -421,9 +426,16 @@ See [Configuration](features/client_configuration.md) for complete environment v
 ## Verification Status
 
 **Entrypoint Coverage:** 100% (4/4 categories documented)
-**Surface Coverage:** Initial (6 HTTP routes, 8 Python exports)
-**Spec Coverage:** In progress (12 feature specs planned)
+**Surface Coverage:** 9/9 HTTP routes identified (3 documented, 6 pending)
+**Spec Coverage:** 3 core endpoints documented (Create, Get, Query)
+
+**Recent Updates (2026-01-11):**
+- ✓ Created spec for GET /api/v1/runs/{event_id} (newly fixed endpoint)
+- ✓ Updated line numbers for route reordering (commit 8c74f69)
+- ✓ Verified all documented endpoints against current implementation
 
 **Evidence Source:** Direct file reads from codebase
 **Hallucination Risk:** Low (all statements backed by file:line evidence)
 **Inference Level:** Minimal (architecture inferred from code structure only)
+
+**Next Priority:** Document PATCH /api/v1/runs/{event_id} and GET /api/v1/metadata
