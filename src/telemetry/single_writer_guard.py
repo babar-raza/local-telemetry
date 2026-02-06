@@ -43,16 +43,15 @@ class SingleWriterGuard:
             lock_file: Path to lock file (e.g., "/tmp/telemetry_api.lock")
         """
         self.lock_file = Path(lock_file)
-        self.lock_fd: Optional[int] = None
+        self.lock_fd = None  # file handle
         self.is_windows = platform.system() == "Windows"
 
     def acquire(self):
         """
         Acquire exclusive lock - fails if another instance running.
 
-        Includes stale lock detection for Docker restart scenarios:
-        - If lock holder hostname differs from current, lock is likely stale
-        - Automatically cleans up stale locks from crashed containers
+        Uses OS-level file locking. Locks are released automatically if the process dies,
+        preventing stale lock-file wedges after crashes or abrupt container stops.
 
         Raises:
             SystemExit: If lock cannot be acquired (another instance running)
@@ -60,46 +59,45 @@ class SingleWriterGuard:
         # Ensure parent directory exists
         self.lock_file.parent.mkdir(parents=True, exist_ok=True)
 
-        # Check if lock file already exists
-        if self.lock_file.exists():
-            # Try to detect stale lock (from crashed Docker container)
-            if self._is_stale_lock():
-                print(f"[WARN] Detected stale lock from crashed container, cleaning up...")
+        # Robust single-writer enforcement: use OS-level file locking.
+        #
+        # Why this change:
+        # - Relying on "file exists" can wedge the service if the lock file is left behind
+        #   (empty/truncated) after a crash or abrupt container stop.
+        # - OS-level locks are released automatically when the process dies.
+        #
+        # Strategy:
+        # - Open the lock file (create if needed)
+        # - Acquire a non-blocking exclusive lock
+        # - Truncate + write PID/hostname for troubleshooting
+        try:
+            self.lock_fd = open(self.lock_file, 'a+')
+
+            if self.is_windows:
+                # Lock 1 byte at start of file
                 try:
-                    self.lock_file.unlink()
-                    print(f"[OK] Removed stale lock file")
-                except Exception as e:
-                    print(f"[ERROR] Failed to remove stale lock: {e}")
+                    self.lock_fd.seek(0)
+                    msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+                except (IOError, OSError):
                     self._print_lock_error()
                     sys.exit(1)
             else:
-                # Lock is held by active process
-                self._print_lock_error()
-                sys.exit(1)
-
-        try:
-            # Create and open lock file exclusively
-            # On Windows: use 'x' mode (exclusive creation)
-            # This fails if file already exists
-            self.lock_fd = open(self.lock_file, 'x')
-
-            # Acquire Unix flock if available (for extra safety on Unix)
-            if not self.is_windows:
-                fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                try:
+                    fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except (IOError, OSError):
+                    self._print_lock_error()
+                    sys.exit(1)
 
             # Write PID and hostname to lock file for troubleshooting
+            self.lock_fd.seek(0)
+            self.lock_fd.truncate()
             self.lock_fd.write(f"{os.getpid()}\n")
             self.lock_fd.write(f"{platform.node()}\n")
             self.lock_fd.flush()
 
             print(f"[OK] Acquired single-writer lock: {self.lock_file}")
 
-        except FileExistsError:
-            # Lock file already exists (another instance running)
-            self._print_lock_error()
-            sys.exit(1)
         except (IOError, OSError) as e:
-            # Other lock errors
             self._print_lock_error()
             sys.exit(1)
 
@@ -115,6 +113,14 @@ class SingleWriterGuard:
                 if not self.is_windows:
                     try:
                         fcntl.flock(self.lock_fd.fileno(), fcntl.LOCK_UN)
+                    except (IOError, OSError):
+                        pass  # Already unlocked
+
+                # Release Windows lock if applicable
+                if self.is_windows:
+                    try:
+                        self.lock_fd.seek(0)
+                        msvcrt.locking(self.lock_fd.fileno(), msvcrt.LK_UNLCK, 1)
                     except (IOError, OSError):
                         pass  # Already unlocked
 
@@ -135,7 +141,7 @@ class SingleWriterGuard:
 
     def _is_stale_lock(self) -> bool:
         """
-        Detect if existing lock is stale (from crashed container).
+        Detect if a text-based lock marker appears stale (legacy helper; currently unused).
 
         A lock is considered stale if:
         - Lock holder hostname differs from current hostname (different container)

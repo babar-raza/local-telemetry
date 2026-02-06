@@ -388,6 +388,20 @@ class TelemetryAPIConfig:
     DB_JOURNAL_MODE: str = os.getenv("TELEMETRY_DB_JOURNAL_MODE", "DELETE")
     DB_SYNCHRONOUS: str = os.getenv("TELEMETRY_DB_SYNCHRONOUS", "FULL")
 
+    # SQLite lock contention handling
+    # NOTE: busy_timeout is the primary mechanism to avoid "database is locked" errors
+    # in DELETE journal mode under transient contention.
+    DB_BUSY_TIMEOUT_MS: int = int(os.getenv("TELEMETRY_DB_BUSY_TIMEOUT_MS", "30000"))
+    DB_CONNECT_TIMEOUT_SECONDS: float = float(
+        os.getenv("TELEMETRY_DB_CONNECT_TIMEOUT_SECONDS", "30")
+    )
+
+    # Retry logic (only for lock/busy errors)
+    DB_MAX_RETRIES: int = int(os.getenv("TELEMETRY_DB_MAX_RETRIES", "3"))
+    DB_RETRY_BASE_DELAY_SECONDS: float = float(
+        os.getenv("TELEMETRY_DB_RETRY_BASE_DELAY_SECONDS", "0.1")
+    )
+
     # PostgreSQL (optional)
     DATABASE_URL: Optional[str] = os.getenv("DATABASE_URL")
 
@@ -410,7 +424,8 @@ class TelemetryAPIConfig:
     RATE_LIMIT_RPM: int = int(os.getenv("TELEMETRY_RATE_LIMIT_RPM", "60"))  # Requests per minute
 
     # Logging
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    # Prefer TELEMETRY_LOG_LEVEL; fall back to LOG_LEVEL for backward compatibility
+    LOG_LEVEL: str = os.getenv("TELEMETRY_LOG_LEVEL") or os.getenv("LOG_LEVEL", "INFO")
 
     # Telemetry Optimization
     TELEMETRY_LEVEL: str = os.getenv("TELEMETRY_LEVEL", "INFO")
@@ -444,6 +459,30 @@ class TelemetryAPIConfig:
             errors.append(
                 f"CRITICAL: TELEMETRY_DB_SYNCHRONOUS must be FULL for corruption "
                 f"prevention, got {cls.DB_SYNCHRONOUS}"
+            )
+
+        # busy_timeout must be set to a sane value (prevents lock timeouts)
+        if cls.DB_BUSY_TIMEOUT_MS < 1000:
+            warnings.append(
+                f"WARNING: TELEMETRY_DB_BUSY_TIMEOUT_MS is very low ({cls.DB_BUSY_TIMEOUT_MS}ms). "
+                "This can cause 'database is locked' errors under contention."
+            )
+
+        if cls.DB_CONNECT_TIMEOUT_SECONDS <= 0:
+            errors.append(
+                f"CRITICAL: TELEMETRY_DB_CONNECT_TIMEOUT_SECONDS must be > 0, "
+                f"got {cls.DB_CONNECT_TIMEOUT_SECONDS}"
+            )
+
+        if cls.DB_MAX_RETRIES < 0:
+            errors.append(
+                f"CRITICAL: TELEMETRY_DB_MAX_RETRIES must be >= 0, got {cls.DB_MAX_RETRIES}"
+            )
+
+        if cls.DB_RETRY_BASE_DELAY_SECONDS < 0:
+            errors.append(
+                f"CRITICAL: TELEMETRY_DB_RETRY_BASE_DELAY_SECONDS must be >= 0, "
+                f"got {cls.DB_RETRY_BASE_DELAY_SECONDS}"
             )
 
         # DB path directory must exist or be creatable
@@ -499,6 +538,9 @@ class TelemetryAPIConfig:
         print(f"DB Path:         {cls.DB_PATH}")
         print(f"DB Journal Mode: {cls.DB_JOURNAL_MODE} (MUST BE DELETE)")
         print(f"DB Synchronous:  {cls.DB_SYNCHRONOUS} (MUST BE FULL)")
+        print(f"DB busy_timeout: {cls.DB_BUSY_TIMEOUT_MS}ms")
+        print(f"DB conn timeout: {cls.DB_CONNECT_TIMEOUT_SECONDS}s")
+        print(f"DB retries:      {cls.DB_MAX_RETRIES} (base_delay={cls.DB_RETRY_BASE_DELAY_SECONDS}s)")
         print(f"Buffer Dir:      {cls.BUFFER_DIR}")
         print(f"Lock File:       {cls.LOCK_FILE}")
         print(f"Auth Enabled:    {cls.API_AUTH_ENABLED}")

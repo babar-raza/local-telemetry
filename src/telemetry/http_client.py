@@ -170,9 +170,7 @@ class HTTPAPIClient:
                 # Handle success (200)
                 if response.status_code == 200:
                     result = response.json()
-                    logger.info(
-                        f"Event {event_id} updated successfully: {result.get('fields_updated', [])}"
-                    )
+                    logger.info(f"Event {event_id} updated successfully")
                     return result
 
                 # Handle not found (404)

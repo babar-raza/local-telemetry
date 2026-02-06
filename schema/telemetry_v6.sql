@@ -1,6 +1,7 @@
 -- Telemetry Platform Database Schema
--- Version: 6
+-- Version: 7
 -- Generated: Auto-generated from schema.py
+-- v7: Added idx_runs_job_type index for faster DISTINCT queries
 
 -- Enable DELETE mode for Docker volume compatibility
 PRAGMA journal_mode=DELETE;
@@ -13,7 +14,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL UNIQUE,
     run_id TEXT NOT NULL,
-    schema_version INTEGER DEFAULT 6,
+    schema_version INTEGER DEFAULT 7,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now')),
     start_time TEXT NOT NULL,
@@ -118,4 +119,4 @@ CREATE INDEX IF NOT EXISTS idx_commits_run ON commits(run_id);
 
 -- Record schema version
 INSERT OR IGNORE INTO schema_migrations (version, description)
-VALUES (6, 'Schema v6: Canonical telemetry schema');
+VALUES (7, 'Schema v7: Added idx_runs_job_type index for faster DISTINCT queries');

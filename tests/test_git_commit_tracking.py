@@ -27,9 +27,9 @@ from telemetry.schema import create_schema, verify_schema, SCHEMA_VERSION
 class TestSchemaV6Fields:
     """Test schema has git commit tracking fields."""
 
-    def test_schema_version_is_4(self):
-        """Test that SCHEMA_VERSION is 6."""
-        assert SCHEMA_VERSION == 6
+    def test_schema_version_is_7(self):
+        """Test that SCHEMA_VERSION is 7."""
+        assert SCHEMA_VERSION == 7
 
     def test_schema_has_git_commit_columns(self, tmp_path):
         """Test that schema creates git commit columns."""

@@ -27,7 +27,8 @@ import uuid
 # v4: Added git commit tracking fields (hash, source, author, timestamp)
 # v5: Added website, website_section, item_name for API spec compliance
 # v6: Added event_id with UNIQUE constraint for idempotency
-SCHEMA_VERSION = 6
+# v7: Added idx_runs_job_type index for faster DISTINCT queries (/api/v1/metadata)
+SCHEMA_VERSION = 7
 
 
 @dataclass

@@ -35,7 +35,7 @@ def test_imports():
     assert RunRecord is not None
     assert RunEvent is not None
     assert APIPayload is not None
-    assert SCHEMA_VERSION == 6  # v6 includes event_id for idempotency
+    assert SCHEMA_VERSION == 7  # v7 includes idx_runs_job_type for faster DISTINCT
     print("[OK] All imports successful")
 
 

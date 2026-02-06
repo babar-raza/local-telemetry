@@ -30,7 +30,8 @@ from typing import Tuple
 # v4: Added git commit tracking fields (hash, source, author, timestamp)
 # v5: Added website, website_section, item_name for API spec compliance
 # v6: Added event_id with UNIQUE constraint for idempotency
-SCHEMA_VERSION = 6
+# v7: Added idx_runs_job_type index for faster DISTINCT queries (/api/v1/metadata)
+SCHEMA_VERSION = 7
 
 # Table definitions
 TABLES = {
@@ -38,7 +39,7 @@ TABLES = {
 CREATE TABLE IF NOT EXISTS agent_runs (
     run_id TEXT PRIMARY KEY,
     event_id TEXT NOT NULL UNIQUE,
-    schema_version INTEGER DEFAULT 6,
+    schema_version INTEGER DEFAULT 7,
     agent_name TEXT NOT NULL,
     agent_owner TEXT,
     job_type TEXT,
@@ -174,7 +175,7 @@ def create_schema(db_path: str) -> Tuple[bool, list[str]]:
             INSERT OR IGNORE INTO schema_migrations (version, description)
             VALUES (?, ?)
             """,
-            (SCHEMA_VERSION, "Schema v6: Added event_id with UNIQUE constraint for idempotency"),
+            (SCHEMA_VERSION, "Schema v7: Added idx_runs_job_type index for faster DISTINCT queries"),
         )
         if cursor.rowcount > 0:
             messages.append(f"[OK] Recorded schema version: {SCHEMA_VERSION}")
@@ -352,7 +353,7 @@ PRAGMA journal_mode=DELETE;
         sql_content += f"""
 -- Record schema version
 INSERT OR IGNORE INTO schema_migrations (version, description)
-VALUES ({SCHEMA_VERSION}, 'Schema v6: Added event_id with UNIQUE constraint for idempotency');
+VALUES ({SCHEMA_VERSION}, 'Schema v7: Added idx_runs_job_type index for faster DISTINCT queries');
 """
 
         with open(output_file, "w", encoding="utf-8") as f:

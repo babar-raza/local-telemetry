@@ -93,7 +93,7 @@ except Exception as e:
 # Test 5: Check schema file exists
 print()
 print("[Test 5] Checking schema file...")
-schema_file = project_root / "schema" / "telemetry_v6.sql"
+schema_file = project_root / "schema" / "telemetry_v7.sql"
 if schema_file.exists():
     print(f"  [OK] Schema file found: {schema_file}")
 else:
