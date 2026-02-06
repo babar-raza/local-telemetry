@@ -2,7 +2,7 @@
 # Create Windows Task Scheduler task for daily Docker database retention cleanup
 #
 # Purpose:
-#   - Automate daily retention cleanup at 2:00 PM
+#   - Automate daily retention cleanup at 3:30 PM
 #   - Delete records older than 30 days
 #   - Run VACUUM to reclaim disk space
 #   - Configure retry logic and error handling
@@ -48,7 +48,7 @@ $scriptPath = "C:\Users\prora\OneDrive\Documents\GitHub\local-telemetry\scripts\
 $projectDir = "C:\Users\prora\OneDrive\Documents\GitHub\local-telemetry"
 
 # Schedule configuration
-$cleanupTime = "14:00"  # 2:00 PM
+$cleanupTime = "15:30"  # 3:30 PM
 
 # Task settings
 $executionTimeLimit = New-TimeSpan -Hours 2  # Allow up to 2 hours for VACUUM on large databases
@@ -132,7 +132,7 @@ function New-RetentionTask {
 
         Write-Host "      Action created" -ForegroundColor Green
 
-        # Create trigger: Daily at 2:00 PM
+        # Create trigger: Daily at 3:30 PM
         Write-Host "[2/5] Creating task trigger..." -ForegroundColor Yellow
 
         $trigger = New-ScheduledTaskTrigger -Daily -At $cleanupTime

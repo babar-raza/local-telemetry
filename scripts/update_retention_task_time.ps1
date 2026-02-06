@@ -1,5 +1,5 @@
 #!/usr/bin/env powershell
-# Update retention task to run at 2 PM instead of 2 AM
+# Update retention task to run at 3:30 PM PKT
 # Run as Administrator
 
 $ErrorActionPreference = "Stop"
@@ -8,13 +8,13 @@ $ErrorActionPreference = "Stop"
 $taskName = "TelemetryDockerRetentionCleanup"
 $scriptPath = "C:\Users\prora\OneDrive\Documents\GitHub\local-telemetry\scripts\docker_retention_cleanup.ps1"
 $retentionDays = 30
-$cleanupTime = "14:00"  # 2 PM
+$cleanupTime = "15:30"  # 3:30 PM PKT
 
 Write-Host "=== Updating Scheduled Task Time ===" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Configuration:" -ForegroundColor Yellow
 Write-Host "  Task Name: $taskName"
-Write-Host "  New Time: $cleanupTime (2 PM)"
+Write-Host "  New Time: $cleanupTime (3:30 PM PKT)"
 Write-Host "  Retention: $retentionDays days"
 Write-Host ""
 
@@ -88,7 +88,7 @@ Write-Host "  Next Run: $(Get-ScheduledTaskInfo -TaskName $taskName | Select-Obj
 Write-Host ""
 
 Write-Host "The task will now:" -ForegroundColor Yellow
-Write-Host "  - Run daily at 2:00 PM"
+Write-Host "  - Run daily at 3:30 PM PKT"
 Write-Host "  - Run at system startup if a scheduled run was missed"
 Write-Host "  - Delete records older than $retentionDays days"
 Write-Host "  - Run VACUUM to reclaim disk space"
