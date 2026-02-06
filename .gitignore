@@ -192,3 +192,20 @@ site/
 /docs/_audit
 /raw
 /telemetry_buffer
+
+# -----------------------------------------------------------------------------
+# Runtime artifacts (v3.0.0 cleanup)
+# -----------------------------------------------------------------------------
+*.pid
+telemetry_api.lock
+
+# Generated outputs (not source-controlled)
+metadata_result.json
+openapi_runs.json
+e2e_*_output.txt
+e2e_*_results.txt
+E2E_RESULTS_SUMMARY.txt
+E2E_VERIFICATION_REPORT.md
+DEPLOYMENT_REPORT.md
+DATABASE_MANAGEMENT.md
+QUICK_CLEANUP_GUIDE.md
