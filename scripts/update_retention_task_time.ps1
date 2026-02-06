@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 # Configuration
 $taskName = "TelemetryDockerRetentionCleanup"
 $scriptPath = "C:\Users\prora\OneDrive\Documents\GitHub\local-telemetry\scripts\docker_retention_cleanup.ps1"
-$retentionDays = 20
+$retentionDays = 30
 $cleanupTime = "14:00"  # 2 PM
 
 Write-Host "=== Updating Scheduled Task Time ===" -ForegroundColor Cyan
