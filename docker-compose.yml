@@ -99,6 +99,6 @@ networks:
   telemetry-network:
     driver: bridge
   # External network from seo-intelligence project
-  # Shared network name used by seo-intelligence (will be created if missing)
   seo-intelligence-network:
     name: seo-intelligence_gsc_network
+    external: true
