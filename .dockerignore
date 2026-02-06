@@ -77,8 +77,10 @@ scripts/diagnose_*.py
 scripts/recover_*.py
 scripts/associate_*.py
 
-# Keep only migration script
+# Keep only migration script and retention scripts (needed inside container)
 !scripts/migrate_v5_to_v6.py
+!scripts/db_retention_policy.py
+!scripts/db_retention_policy_batched.py
 
 # Environment files
 .env

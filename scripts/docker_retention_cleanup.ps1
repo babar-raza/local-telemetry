@@ -188,13 +188,13 @@ try {
         # Execute retention policy inside container
         if ($DryRun) {
             # For dry-run, container is still running
-            $output = docker exec $ContainerName python3 /app/scripts/db_retention_policy.py /data/telemetry.sqlite --days $Days --dry-run 2>&1
+            $output = docker exec $ContainerName python3 /app/scripts/db_retention_policy_batched.py /data/telemetry.sqlite --days $Days --dry-run 2>&1
         } else {
             # For actual cleanup, we need to start container temporarily to run the script
             docker start $ContainerName | Out-Null
             Start-Sleep -Seconds 2
 
-            $output = docker exec $ContainerName python3 /app/scripts/db_retention_policy.py /data/telemetry.sqlite --days $Days 2>&1
+            $output = docker exec $ContainerName python3 /app/scripts/db_retention_policy_batched.py /data/telemetry.sqlite --days $Days 2>&1
 
             # Stop again after cleanup
             docker stop $ContainerName | Out-Null

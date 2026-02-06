@@ -27,6 +27,9 @@ COPY telemetry_service.py .
 COPY src/ ./src/
 COPY schema/ ./schema/
 
+# Copy retention scripts (executed inside container via docker exec)
+COPY scripts/db_retention_policy.py scripts/db_retention_policy_batched.py ./scripts/
+
 # Create data directory for database
 RUN mkdir -p /data
 
