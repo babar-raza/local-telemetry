@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: local-telemetry-api
-    image: local-telemetry-api:2.1.0
+    image: local-telemetry-api:3.0.0
 
     # Port mapping
     ports:
@@ -27,6 +27,10 @@ services:
       # PRAGMA settings (corruption prevention)
       - TELEMETRY_DB_JOURNAL_MODE=DELETE
       - TELEMETRY_DB_SYNCHRONOUS=FULL
+      - TELEMETRY_DB_BUSY_TIMEOUT_MS=30000
+      - TELEMETRY_DB_CONNECT_TIMEOUT_SECONDS=30
+      - TELEMETRY_DB_MAX_RETRIES=3
+      - TELEMETRY_DB_RETRY_BASE_DELAY_SECONDS=0.1
 
       # API server settings
       - TELEMETRY_API_HOST=0.0.0.0
@@ -95,6 +99,6 @@ networks:
   telemetry-network:
     driver: bridge
   # External network from seo-intelligence project
+  # Shared network name used by seo-intelligence (will be created if missing)
   seo-intelligence-network:
-    external: true
     name: seo-intelligence_gsc_network

@@ -2,15 +2,15 @@
 
 **Quick Start:** This document is the complete reference for integrating with the Local Telemetry Platform HTTP API. Use this when implementing agents or services that need to track telemetry data.
 
-**Version:** 2.1.0
-**Last Updated:** 2026-01-12
+**Version:** 3.0.0
+**Last Updated:** 2026-02-06
 **Detailed Specs:** See [specs/features/](../../specs/features/) for endpoint-specific implementation details
 
 ## Service
 - **Name:** local-telemetry-api
-- **Version:** 2.1.0
+- **Version:** 3.0.0
 - **Container:** local-telemetry-api
-- **Image:** local-telemetry-api:2.1.0
+- **Image:** local-telemetry-api:3.0.0
 - **Base URL:** http://localhost:8765 (configurable via `TELEMETRY_API_URL`)
 - **OpenAPI:** /openapi.json
 - **Interactive Docs:** /docs (Swagger UI), /redoc (ReDoc)
@@ -459,9 +459,17 @@ Notes:
 {
   "agent_names": ["seo_intelligence.insight_engine", "seo_intelligence.scheduler"],
   "job_types": ["insight_generation", "scheduling"],
-  "counts": {"agent_names": 2, "job_types": 2}
+  "counts": {"agent_names": 2, "job_types": 2},
+  "cache_hit": false
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| agent_names | string[] | Distinct agent names in the database |
+| job_types | string[] | Distinct job types in the database |
+| counts | object | Count of unique agent_names and job_types |
+| cache_hit | boolean | `true` if result was served from cache, `false` if freshly queried |
 
 ## Endpoints
 
@@ -500,6 +508,8 @@ Returns distinct agent names and job types seen in the database.
 Auth: not required
 Rate limit: enforced if enabled
 
+**Caching**: Results are cached in-memory for 300 seconds (5 minutes) to improve performance on large datasets. The `cache_hit` field in the response indicates whether the result was served from cache. Cache is automatically invalidated when new runs are created via POST or PATCH endpoints.
+
 Status codes:
 - 200 OK: returns MetadataResponse
 - 429 Too Many Requests: rate limit exceeded
@@ -508,6 +518,16 @@ Status codes:
 Example:
 ```bash
 curl http://localhost:8765/api/v1/metadata
+```
+
+Response:
+```json
+{
+  "agent_names": ["agent1", "agent2"],
+  "job_types": ["job1", "job2"],
+  "counts": {"agent_names": 2, "job_types": 2},
+  "cache_hit": true
+}
 ```
 
 ### POST /api/v1/runs
