@@ -30,9 +30,6 @@ param(
     [Parameter(Mandatory=$false, HelpMessage="Remove existing task instead of creating")]
     [switch]$Remove,
 
-    [Parameter(Mandatory=$false, HelpMessage="Update existing task (force replace)")]
-    [switch]$Update,
-
     [Parameter(Mandatory=$false, HelpMessage="Retention period in days")]
     [int]$RetentionDays = 30
 )
@@ -350,53 +347,9 @@ function Main {
 
     if ($null -ne $existingTask) {
         Write-Host ""
-        Write-Host "[INFO] Task already exists: $taskName" -ForegroundColor Yellow
-        Write-Host ""
-
-        if ($Update) {
-            Write-Host "Update flag detected. Task will be replaced." -ForegroundColor Yellow
-            if (-not (Remove-ExistingTask -TaskName $taskName)) {
-                return 1
-            }
-        } else {
-            Write-Host "Options:" -ForegroundColor Cyan
-            Write-Host "  1. Remove and recreate (recommended): Run with -Update flag" -ForegroundColor Gray
-            Write-Host "  2. Remove only: Run with -Remove flag" -ForegroundColor Gray
-            Write-Host "  3. Keep existing: Do nothing" -ForegroundColor Gray
-            Write-Host ""
-
-            $choice = Read-Host "What would you like to do? (1/2/3)"
-
-            switch ($choice) {
-                "1" {
-                    Write-Host ""
-                    if (-not (Remove-ExistingTask -TaskName $taskName)) {
-                        return 1
-                    }
-                }
-                "2" {
-                    Write-Host ""
-                    if (Remove-ExistingTask -TaskName $taskName) {
-                        Write-Host ""
-                        return 0
-                    } else {
-                        Write-Host ""
-                        return 1
-                    }
-                }
-                "3" {
-                    Write-Host ""
-                    Write-Host "Keeping existing task. No changes made." -ForegroundColor Yellow
-                    Write-Host ""
-                    return 0
-                }
-                default {
-                    Write-Host ""
-                    Write-Host "Invalid choice. Exiting." -ForegroundColor Red
-                    Write-Host ""
-                    return 1
-                }
-            }
+        Write-Host "[INFO] Task already exists: $taskName - replacing automatically" -ForegroundColor Yellow
+        if (-not (Remove-ExistingTask -TaskName $taskName)) {
+            return 1
         }
     }
 
