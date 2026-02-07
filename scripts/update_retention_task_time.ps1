@@ -44,7 +44,7 @@ $action = New-ScheduledTaskAction -Execute "PowerShell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Days $retentionDays"
 
 # Create triggers
-# Trigger 1: Daily at 2 PM
+# Trigger 1: Daily at 3:30 PM PKT
 $dailyTrigger = New-ScheduledTaskTrigger -Daily -At $cleanupTime
 
 # Trigger 2: At startup (run if missed)

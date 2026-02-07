@@ -1,14 +1,14 @@
 #!/usr/bin/env powershell
 # Quick setup script for retention task - Run as Administrator
-# This creates a scheduled task that runs daily at 2 AM and also runs at startup if missed
+# This creates a scheduled task that runs daily at 3:30 PM PKT and also runs at startup if missed
 
 $ErrorActionPreference = "Stop"
 
 # Configuration
 $taskName = "TelemetryDockerRetentionCleanup"
 $scriptPath = "C:\Users\prora\OneDrive\Documents\GitHub\local-telemetry\scripts\docker_retention_cleanup.ps1"
-$retentionDays = 20
-$cleanupTime = "02:00"  # 2 AM
+$retentionDays = 30
+$cleanupTime = "15:30"  # 3:30 PM PKT
 
 Write-Host "=== Setting up Docker Telemetry Retention Scheduled Task ===" -ForegroundColor Cyan
 Write-Host ""
@@ -48,7 +48,7 @@ $action = New-ScheduledTaskAction -Execute "PowerShell.exe" `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -Days $retentionDays"
 
 # Create triggers
-# Trigger 1: Daily at 2 AM
+# Trigger 1: Daily at 3:30 PM PKT
 $dailyTrigger = New-ScheduledTaskTrigger -Daily -At $cleanupTime
 
 # Trigger 2: At startup (run if missed)
@@ -92,7 +92,7 @@ Write-Host "  Next Run: $(Get-ScheduledTaskInfo -TaskName $taskName | Select-Obj
 Write-Host ""
 
 Write-Host "The task will:" -ForegroundColor Yellow
-Write-Host "  - Run daily at 2:00 AM"
+Write-Host "  - Run daily at 3:30 PM PKT"
 Write-Host "  - Run at system startup if a scheduled run was missed"
 Write-Host "  - Delete records older than $retentionDays days"
 Write-Host "  - Run VACUUM to reclaim disk space"

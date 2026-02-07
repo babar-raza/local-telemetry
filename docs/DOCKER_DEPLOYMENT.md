@@ -774,8 +774,8 @@ find "$BACKUP_DIR" -name "telemetry_*.sqlite" -mtime +7 -delete
 Add to cron:
 
 ```bash
-# Daily at 2 AM
-0 2 * * * /path/to/backup_telemetry.sh
+# Daily at 3:30 PM PKT
+30 15 * * * /path/to/backup_telemetry.sh
 ```
 
 ### 7. Monitor Health
@@ -896,7 +896,7 @@ docker compose -f "C:\path\to\local-telemetry\docker-compose.yml" cp telemetry-a
 Get-ChildItem $BackupDir -Filter "telemetry_*.sqlite" | Where-Object {$_.LastWriteTime -lt (Get-Date).AddDays(-7)} | Remove-Item
 ```
 
-Schedule daily at 2 AM:
+Schedule daily at 3:30 PM PKT:
 
 ```powershell
 $Action = New-ScheduledTaskAction -Execute "PowerShell.exe" -Argument "-File C:\path\to\backup_docker_telemetry.ps1"

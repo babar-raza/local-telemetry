@@ -11,7 +11,7 @@
 #   .\docker_retention_cleanup.ps1 -Days 30                # Delete records older than 30 days
 #   .\docker_retention_cleanup.ps1 -Days 30 -DryRun        # Preview without changes
 #
-# Scheduled via Windows Task Scheduler (Daily at 2:00 AM)
+# Scheduled via Windows Task Scheduler (Daily at 3:30 PM PKT)
 #
 # Exit Codes:
 #   0 = Success
