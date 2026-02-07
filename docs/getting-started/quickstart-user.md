@@ -38,5 +38,5 @@ See `reference/config.md` for defaults and validation behavior.
 
 ## Next Steps
 - Scenario guide: `guides/instrumentation.md`
-- CLI reference: `reference/cli.md`
-- File/storage contracts: `reference/file-contracts.md`
+- HTTP API: `reference/http-api.md`
+- Schema: `reference/schema.md`

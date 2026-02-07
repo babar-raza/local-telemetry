@@ -4,7 +4,7 @@
 
 **Version:** 3.0.0
 **Last Updated:** 2026-02-07
-**Detailed Specs:** See [specs/features/](../../specs/features/) for endpoint-specific implementation details
+**Source:** See `telemetry_service.py` for the FastAPI implementation
 
 ## Service
 
@@ -1145,7 +1145,7 @@ class BufferedTelemetry:
 
 ## See Also
 
-- **Detailed Endpoint Specs:** [specs/features/](../../specs/features/)
-- **System Architecture:** [specs/_index.md](../../specs/_index.md)
-- **Deployment Guide:** [docs/DEPLOYMENT_GUIDE.md](../DEPLOYMENT_GUIDE.md)
+- **System Architecture:** [docs/architecture/system.md](../architecture/system.md)
+- **Configuration Reference:** [docs/reference/config.md](config.md)
+- **Deployment Guide:** [docs/getting-started/quickstart-operator.md](../getting-started/quickstart-operator.md)
 - **Python Client SDK:** Use `TelemetryClient` from `src/telemetry/client.py` for automatic buffer failover and retry logic

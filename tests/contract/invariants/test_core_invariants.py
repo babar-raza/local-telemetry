@@ -49,24 +49,31 @@ def test_invariant_never_crash_agent():
         pytest.skip("TelemetryClient not available in test environment")
 
     # Test with unreachable API (port that's not listening)
-    client = TelemetryClient(api_base_url="http://localhost:9999", fail_silently=True)
+    from telemetry.config import TelemetryConfig
+    import os, tempfile
+    os.environ["TELEMETRY_API_URL"] = "http://localhost:9999"
+    os.environ["GOOGLE_SHEETS_API_ENABLED"] = "false"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["TELEMETRY_BASE_DIR"] = tmpdir
+        config = TelemetryConfig.from_env()
+        client = TelemetryClient(config=config)
 
-    # These should not raise exceptions
-    try:
-        # start_run should return event_id or None, not raise
-        result = client.start_run(
-            agent_name="contract-test",
-            job_type="never-crash-test"
-        )
-        # Client should handle failure gracefully
-        assert True, "start_run completed without exception"
+        # These should not raise exceptions
+        try:
+            # start_run should return event_id or None, not raise
+            result = client.start_run(
+                agent_name="contract-test",
+                job_type="never-crash-test"
+            )
+            # Client should handle failure gracefully
+            assert True, "start_run completed without exception"
 
-        # end_run should handle missing run gracefully
-        client.end_run(event_id="nonexistent", status="success")
-        assert True, "end_run completed without exception"
+            # end_run should handle missing run gracefully
+            client.end_run(run_id="nonexistent", status="success")
+            assert True, "end_run completed without exception"
 
-    except Exception as e:
-        pytest.fail(f"Client raised exception (violates Never Crash): {e}")
+        except Exception as e:
+            pytest.fail(f"Client raised exception (violates Never Crash): {e}")
 
 
 # =============================================================================

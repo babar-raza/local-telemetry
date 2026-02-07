@@ -14,7 +14,7 @@
 
 ## What to watch
 - Disk space: warns if <5GB, fails if <1GB.
-- DB integrity: should report `ok`; otherwise run recovery (`guides/recovery-from-ndjson.md`) or restore backup.
+- DB integrity: should report `ok`; otherwise restore from backup (`guides/backup-and-restore.md`).
 - Recent activity: zero runs in last hour may indicate upstream agent issues.
 - API posting: watch `api_posted`/`api_retry_count` via DB query if remote posting enabled.
 
@@ -24,5 +24,5 @@
 
 ## Links
 - Configuration: `reference/config.md`
-- CLI details: `reference/cli.md`
-- File contracts: `reference/file-contracts.md`
+- HTTP API: `reference/http-api.md`
+- Schema: `reference/schema.md`

@@ -45,4 +45,4 @@ Goal: record agent runs/events with `TelemetryClient` while avoiding crashes.
 ## Links
 - Configuration: `reference/config.md`
 - API surface: `reference/api.md`
-- File contracts: `reference/file-contracts.md`
+- Schema: `reference/schema.md`
