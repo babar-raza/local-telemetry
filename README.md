@@ -1,7 +1,5 @@
 # Local Telemetry Platform
 
-[![Contract Tests](https://github.com/anthropics/local-telemetry/actions/workflows/contract_tests.yml/badge.svg)](https://github.com/anthropics/local-telemetry/actions/workflows/contract_tests.yml)
-
 A Python library for tracking agent runs, metrics, and performance with dual-write resilience and optional remote API posting.
 
 ## The Problem
@@ -48,7 +46,7 @@ with client.track_run("my_agent", "process_files") as ctx:
 ### Dual-Write Storage
 Every write goes to **two destinations** for resilience:
 - **NDJSON files** (`raw/events_YYYYMMDD.ndjson`) - Append-only, crash-resilient, human-readable
-- **SQLite database** (`db/telemetry.sqlite`) - Structured queries, WAL mode for concurrent access
+- **SQLite database** (`db/telemetry.sqlite`) - Structured queries, DELETE journal mode for corruption prevention
 
 ### Never Crashes Your Agent
 The library is designed to **never interrupt your agent's work**:
@@ -71,8 +69,8 @@ success, msg = client.associate_commit(
 ### Optional API Posting
 Fire-and-forget posting to remote APIs (Google Sheets, webhooks, etc.):
 - Automatic retry with exponential backoff (1s, 2s, 4s)
+- Smart retry logic: 4xx errors are not retried, only transient 5xx/network errors
 - Tracks posting status per run
-- Batch retry for failed posts
 
 ### Cross-Platform Support
 Works on Windows, Linux, macOS, Docker, and Kubernetes with automatic path detection.
@@ -87,10 +85,10 @@ cd local-telemetry
 pip install -e .
 ```
 
-### 2. Initialize Storage
+### 2. Initialize Database
 
 ```bash
-python scripts/setup_storage.py
+python scripts/setup_database.py
 ```
 
 Or set environment variables:
@@ -119,37 +117,15 @@ client.end_run(run_id, status="success", items_succeeded=10)
 
 ### 4. Configure Telemetry Clients (Optional)
 
-The library uses a two-client architecture. **Most users only need the default configuration:**
+The library uses a two-client architecture. Most users only need the default:
 
 ```bash
-# .env (Recommended default - local-telemetry only)
+# .env (local-telemetry only)
 TELEMETRY_API_URL=http://localhost:8765
 GOOGLE_SHEETS_API_ENABLED=false
 ```
 
-**Google Sheets Export (Optional):**
-
-Only enable if you need external reporting:
-
-```bash
-# .env (Dual-client configuration)
-TELEMETRY_API_URL=http://localhost:8765
-GOOGLE_SHEETS_API_URL=https://sheets.googleapis.com/v4/spreadsheets/YOUR_SHEET_ID/values/Sheet1!A1:append
-GOOGLE_SHEETS_API_ENABLED=true
-METRICS_API_TOKEN=your_google_sheets_api_token
-```
-
-**Common Gotchas:**
-
-- Don't set `GOOGLE_SHEETS_API_URL` to `localhost` (causes 404 errors)
-- Google Sheets export is fire-and-forget (failures don't block your agent)
-- Local-telemetry (HTTPAPIClient) is always used as primary backend
-
-For detailed configuration and troubleshooting, see:
-- **[Telemetry Clients Architecture](docs/TELEMETRY_CLIENTS.md)** - Understanding the two-client design
-- **[Configuration Guide](docs/CONFIGURATION.md)** - Complete environment variable reference
-- **[Migration Guide](docs/MIGRATION_GUIDE.md)** - Upgrading from old configuration
-- **[Troubleshooting](docs/TROUBLESHOOTING.md)** - Common issues and solutions
+For Google Sheets export, see [docs/reference/config.md](docs/reference/config.md).
 
 ### 5. Query Your Data
 
@@ -178,7 +154,7 @@ sqlite3 db/telemetry.sqlite "SELECT agent_name, COUNT(*) as runs, SUM(CASE WHEN 
               ▼                                       ▼
 ┌─────────────────────────┐             ┌─────────────────────────┐
 │  {base}/raw/*.ndjson    │             │  {base}/db/*.sqlite     │
-│  Daily rotating files   │             │  WAL mode database      │
+│  Daily rotating files   │             │  DELETE journal mode    │
 └─────────────────────────┘             └─────────────────────────┘
 ```
 
@@ -190,13 +166,11 @@ sqlite3 db/telemetry.sqlite "SELECT agent_name, COUNT(*) as runs, SUM(CASE WHEN 
 │   ├── events_20251215.ndjson
 │   └── events_20251214.ndjson
 ├── db/                            # SQLite database
-│   ├── telemetry.sqlite
-│   ├── telemetry.sqlite-wal       # Write-ahead log
-│   └── telemetry.sqlite-shm       # Shared memory
+│   └── telemetry.sqlite           # DELETE journal mode
 └── backups/                       # Automated backups
 ```
 
-## HTTP API Service (v2.1.0+)
+## HTTP API Service (v3.0.0)
 
 The telemetry service includes a FastAPI-based HTTP server that provides single-writer access to the SQLite database, preventing corruption from concurrent writes.
 
@@ -204,6 +178,7 @@ The telemetry service includes a FastAPI-based HTTP server that provides single-
 - Single-writer pattern with file locking
 - Event idempotency via `event_id` UNIQUE constraint
 - Query and update endpoints for stale run cleanup
+- Git commit association and URL construction
 - Health and metrics endpoints
 
 **Starting the Service:**
@@ -212,193 +187,27 @@ The telemetry service includes a FastAPI-based HTTP server that provides single-
 # Development
 python telemetry_service.py
 
-# Production (Docker)
+# Production (Docker - recommended)
 docker-compose up -d
 ```
 
 **API Endpoints:**
 
-```bash
-# Create run
-POST /api/v1/runs
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/runs` | Create a run |
+| `POST` | `/api/v1/runs/batch` | Batch create runs |
+| `GET` | `/api/v1/runs` | Query runs (filter by agent, status, date) |
+| `PATCH` | `/api/v1/runs/{event_id}` | Update a run |
+| `POST` | `/api/v1/runs/{event_id}/associate-commit` | Associate git commit |
+| `GET` | `/api/v1/runs/{event_id}/commit-url` | Get commit URL |
+| `GET` | `/api/v1/runs/{event_id}/repo-url` | Get repo URL |
+| `GET` | `/api/v1/metadata/{field}` | Get distinct field values |
+| `GET` | `/health` | Health check |
+| `GET` | `/metrics` | System metrics |
+| `GET` | `/version` | API version |
 
-# Batch create
-POST /api/v1/runs/batch
-
-# Query runs (v2.1.0+)
-GET /api/v1/runs?agent_name=hugo-translator&status=running&created_before=2025-12-24T12:00:00Z
-
-# Update run (v2.1.0+)
-PATCH /api/v1/runs/{event_id}
-
-# Health check
-GET /health
-
-# System metrics
-GET /metrics
-```
-
-**Use Case: Stale Run Cleanup**
-
-When agents crash or are forcefully terminated, telemetry records can get stuck in "running" state. The v2.1.0 query and update endpoints enable cleanup on startup:
-
-```python
-import requests
-from datetime import datetime, timedelta, timezone
-
-# Query for stale running records (older than 1 hour)
-stale_threshold = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
-response = requests.get(
-    "http://localhost:8765/api/v1/runs",
-    params={
-        "agent_name": "hugo-translator",
-        "status": "running",
-        "created_before": stale_threshold
-    }
-)
-
-# Mark each stale run as cancelled
-for run in response.json():
-    requests.patch(
-        f"http://localhost:8765/api/v1/runs/{run['event_id']}",
-        json={
-            "status": "cancelled",
-            "end_time": datetime.now(timezone.utc).isoformat(),
-            "error_summary": f"Stale run cleaned up on startup (created at {run['created_at']})"
-        }
-    )
-```
-
-**Query Performance:**
-
-The v2.1.0 release includes optimized database indexes for fast query operations:
-- Queries on 400+ runs complete in <1ms
-- Stale run detection queries are 83% faster with composite indexes
-- All queries use `ORDER BY created_at DESC` for consistent results
-
-For performance benchmarks and optimization details, see [docs/DEPLOYMENT_GUIDE.md - Database Performance](docs/DEPLOYMENT_GUIDE.md#database-performance-and-optimization).
-
-See [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) for complete API reference and deployment instructions.
-
-## Interactive Dashboard
-
-The telemetry platform includes a Streamlit-based web dashboard for viewing and editing agent run data through an intuitive UI.
-
-**Features:**
-- 📋 **Browse Runs**: Search, filter, and paginate through all agent runs
-- ✏️ **Edit Single Run**: Modify any of the 11 editable fields with validation
-- 📝 **Bulk Edit**: Update multiple runs at once with progress tracking
-- 📈 **Analytics**: 5 interactive charts showing success rates, timelines, and metrics
-- 💾 **Export**: Download data as CSV, Excel (multi-sheet), or JSON
-
-**Starting the Dashboard:**
-
-```bash
-# Install dashboard dependencies
-pip install -r requirements-dashboard.txt
-
-# Ensure API service is running
-python telemetry_service.py
-
-# Start the dashboard (in a new terminal)
-streamlit run scripts/dashboard.py
-```
-
-**Windows Users - Streamlit PATH Issue:**
-
-If you installed with `pip install --user` and get "No module named streamlit" error, the streamlit executable may not be in your PATH. Use one of these solutions:
-
-**Option 1: Use full path to streamlit**
-```bash
-C:\Users\<username>\AppData\Roaming\Python\Python313\Scripts\streamlit.exe run scripts/dashboard.py
-```
-
-**Option 2: Add to PATH permanently**
-```bash
-set PATH=%PATH%;C:\Users\%USERNAME%\AppData\Roaming\Python\Python313\Scripts
-streamlit run scripts/dashboard.py
-```
-
-**Option 3: Use virtual environment (recommended)**
-```bash
-python -m venv venv
-venv\Scripts\pip.exe install -r requirements-dashboard.txt
-venv\Scripts\streamlit.exe run scripts/dashboard.py
-```
-
-The dashboard will open in your browser at http://localhost:8501
-
-**Dashboard Tabs:**
-
-1. **Browse Runs**
-   - Filter by agent name, status, date range, job type
-   - Pagination support (10-500 rows per page)
-   - Exclude test data (job_type='test')
-   - Select runs for editing
-
-2. **Edit Single Run**
-   - Fetch run by event_id
-   - Edit all 11 PATCH-allowed fields:
-     - status, end_time, duration_ms
-     - error_summary, error_details, output_summary
-     - items_succeeded, items_failed, items_skipped
-     - metrics_json, context_json
-   - Client-side validation
-   - Real-time updates via PATCH API
-
-3. **Bulk Edit**
-   - Select multiple runs from Browse tab
-   - Choose field to update
-   - Preview changes before applying
-   - Progress bar with success/failure tracking
-   - Retry failed updates
-
-4. **Analytics**
-   - Success Rate by Agent (bar chart)
-   - Agent Activity Timeline (line chart)
-   - Item Processing Metrics (grouped bar chart)
-   - Duration Distribution (histogram)
-   - Job Type Breakdown (treemap)
-   - Summary statistics
-
-5. **Export**
-   - Select columns to include
-   - Filter and limit rows
-   - Preview export data
-   - Download as CSV, Excel (3 sheets), or JSON
-
-**Configuration:**
-
-```bash
-# Optional: Override default API URL
-export TELEMETRY_API_URL=http://localhost:8765
-```
-
-**Editable Fields:**
-
-The dashboard allows editing these 11 fields via the PATCH endpoint:
-
-| Field | Type | Validation |
-|-------|------|------------|
-| status | enum | running, success, failed, partial, timeout, cancelled |
-| end_time | string | ISO 8601 datetime |
-| duration_ms | integer | ≥ 0 |
-| error_summary | string | Max 500 chars |
-| error_details | string | Max 5000 chars |
-| output_summary | string | Max 1000 chars |
-| items_succeeded | integer | ≥ 0 |
-| items_failed | integer | ≥ 0 |
-| items_skipped | integer | ≥ 0 |
-| metrics_json | object | Valid JSON |
-| context_json | object | Valid JSON |
-
-**Use Cases:**
-
-- **Stale Run Cleanup**: Bulk update stuck "running" records to "cancelled"
-- **Error Correction**: Fix incorrect status or item counts
-- **Data Enrichment**: Add output_summary or context_json post-execution
-- **Reporting**: Export filtered data for weekly reports or analysis
-- **Monitoring**: View analytics charts to identify performance trends
+For complete API documentation, see [docs/reference/http-api.md](docs/reference/http-api.md).
 
 ## Configuration
 
@@ -407,14 +216,15 @@ All configuration via environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `TELEMETRY_BASE_DIR` | Base storage directory | Auto-detected |
-| `TELEMETRY_DB_PATH` | Direct database path (overrides base) | `{base}/db/telemetry.sqlite` |
-| `TELEMETRY_NDJSON_DIR` | NDJSON directory override | `{base}/raw` |
-| `METRICS_API_URL` | Remote API endpoint | None (disabled) |
-| `METRICS_API_TOKEN` | API authentication token | None |
-| `METRICS_API_ENABLED` | Enable/disable API posting | `true` |
-| `AGENT_OWNER` | Default agent owner | None |
+| `TELEMETRY_DB_PATH` | Direct database path | `{base}/db/telemetry.sqlite` |
+| `TELEMETRY_API_URL` | HTTP API URL | `http://localhost:8765` |
+| `TELEMETRY_API_PORT` | API server port | `8765` |
+| `TELEMETRY_API_WORKERS` | Uvicorn workers (must be 1) | `1` |
+| `TELEMETRY_DB_JOURNAL_MODE` | SQLite journal mode | `DELETE` |
+| `TELEMETRY_DB_SYNCHRONOUS` | SQLite sync mode | `FULL` |
+| `GOOGLE_SHEETS_API_ENABLED` | Enable Google Sheets export | `false` |
 
-See [docs/reference/config.md](docs/reference/config.md) for complete configuration reference.
+See [docs/reference/config.md](docs/reference/config.md) for the complete reference.
 
 ## Available Metrics
 
@@ -440,38 +250,18 @@ Track these fields on every run:
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/setup_storage.py` | Initialize storage directories |
-| `scripts/setup_database.py` | Create database schema |
-| `scripts/backup_database.py` | Backup SQLite database |
-| `scripts/recover_database.py` | Recover from NDJSON logs |
-| `scripts/monitor_telemetry_health.py` | Health check monitoring |
-| `scripts/validate_installation.py` | Verify installation |
-| `scripts/diagnose_pragma_settings.py` | Diagnose database PRAGMA settings |
-| `scripts/check_db_integrity.py` | Check database integrity |
-
-## Troubleshooting
-
-### Quick Diagnostics
-
-**Validate installation:**
-```bash
-python scripts/validate_installation.py
-```
-Checks: environment, storage, database (including PRAGMA settings), configuration, tests.
-
-**Diagnose PRAGMA issues:**
-```bash
-python scripts/diagnose_pragma_settings.py
-```
-Shows connection-level PRAGMA settings and identifies discrepancies.
-
-**Check database integrity:**
-```bash
-python scripts/check_db_integrity.py
-```
-Verifies database is not corrupted.
-
-For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+| `scripts/setup_database.py` | Create/initialize database schema |
+| `scripts/db_retention_policy.py` | Database retention cleanup |
+| `scripts/db_retention_policy_batched.py` | Production retention (batched, preferred) |
+| `scripts/docker_retention_cleanup.ps1` | Docker wrapper for retention |
+| `scripts/setup_docker_retention_task.ps1` | Task Scheduler retention automation |
+| `scripts/start_telemetry_api.ps1` | Service startup (Windows PowerShell) |
+| `scripts/start_telemetry_api.sh` | Service startup (Linux/Docker) |
+| `scripts/start_telemetry_api.bat` | Service startup (Windows batch) |
+| `scripts/backup_docker_telemetry.ps1` | Docker volume backup |
+| `scripts/restore_docker_backup.ps1` | Docker backup restore |
+| `scripts/setup_docker_backup_task.ps1` | Backup automation via Task Scheduler |
+| `scripts/sql/telemetry_audit.sql` | Useful SQL audit queries |
 
 ## Documentation
 
@@ -481,52 +271,67 @@ For detailed troubleshooting, see [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING
 |------|------------|
 | **Agent Developer** | [docs/getting-started/quickstart-user.md](docs/getting-started/quickstart-user.md) |
 | **Platform Operator** | [docs/getting-started/quickstart-operator.md](docs/getting-started/quickstart-operator.md) |
-| **Contributor** | [docs/getting-started/quickstart-contributor.md](docs/getting-started/quickstart-contributor.md) |
+| **Contributor** | [docs/development/contributing.md](docs/development/contributing.md) |
 
 ### Guides
 
 - [Instrumentation Guide](docs/guides/instrumentation.md) - Detailed instrumentation patterns
-- [Backup & Restore](docs/guides/backup-and-restore.md) - Data protection
-- [Recovery from NDJSON](docs/guides/recovery-from-ndjson.md) - Disaster recovery
+- [Backup & Restore](docs/guides/backup-and-restore.md) - Data protection and recovery
 - [Monitoring & Health](docs/guides/monitoring-and-health.md) - Operational monitoring
-- [Quality Gates](docs/guides/quality-gates.md) - CI/CD integration
 
 ### Reference
 
-- [API Reference](docs/reference/api.md) - TelemetryClient API
+- [HTTP API Reference](docs/reference/http-api.md) - Complete endpoint documentation
+- [Python API Reference](docs/reference/api.md) - TelemetryClient API
 - [Configuration](docs/reference/config.md) - Environment variables
-- [CLI Reference](docs/reference/cli.md) - Command-line tools
-- [Schema Reference](docs/reference/schema.md) - Database schema
-- [File Contracts](docs/reference/file-contracts.md) - Storage formats
+- [Schema Reference](docs/reference/schema.md) - Database schema (v7)
 
 ### Architecture
 
 - [System Architecture](docs/architecture/system.md) - Component overview
 - [Design Decisions](docs/architecture/decisions.md) - ADRs and rationale
 
+### Operations
+
+- [Runbook](docs/operations/runbook.md) - Operational procedures
+- [Troubleshooting](docs/operations/troubleshooting.md) - Common issues and solutions
+
 ## Project Structure
 
 ```
 local-telemetry/
-├── src/telemetry/          # Core library
-│   ├── __init__.py         # Public exports
-│   ├── client.py           # TelemetryClient, RunContext
-│   ├── config.py           # TelemetryConfig
-│   ├── models.py           # RunRecord, RunEvent, APIPayload
-│   ├── database.py         # DatabaseWriter (SQLite)
-│   ├── local.py            # NDJSONWriter
-│   ├── api.py              # APIClient
-│   └── schema.py           # Database schema
-├── scripts/                # Utility scripts
-├── tests/                  # Test suite
-├── docs/                   # Documentation
-│   ├── getting-started/    # Quickstart guides
-│   ├── guides/             # How-to guides
-│   ├── reference/          # API/config reference
-│   ├── architecture/       # System design
-│   └── operations/         # Runbooks
-├── config/                 # Configuration templates
-└── pyproject.toml          # Package configuration
+├── src/telemetry/             # Core library
+│   ├── __init__.py            # Public exports
+│   ├── client.py              # TelemetryClient, RunContext
+│   ├── config.py              # TelemetryConfig
+│   ├── models.py              # RunRecord, RunEvent, APIPayload
+│   ├── database.py            # DatabaseWriter (SQLite)
+│   ├── local.py               # NDJSONWriter
+│   ├── api.py                 # APIClient (Google Sheets)
+│   ├── http_client.py         # HTTPAPIClient (local API)
+│   ├── schema.py              # Database schema management
+│   ├── git_detector.py        # Auto Git context detection
+│   ├── url_builder.py         # GitHub/GitLab/Bitbucket URLs
+│   ├── buffer.py              # Write buffer
+│   ├── logger.py              # Logging configuration
+│   ├── single_writer_guard.py # File lock guard
+│   ├── status.py              # Run status management
+│   └── helpers/               # Helper modules
+├── scripts/                   # Operational scripts (12 files)
+├── tests/                     # Test suite
+│   ├── contract/              # Contract tests (locked behavior)
+│   ├── integration/           # Integration tests
+│   ├── durability/            # Crash recovery tests
+│   ├── regression/            # Bug fix regression tests
+│   ├── stress/                # Concurrent write tests
+│   └── test_*.py              # Unit tests
+├── docs/                      # Documentation (16 files)
+├── schema/                    # SQL schema definitions
+├── migrations/                # SQL migration scripts
+├── telemetry_service.py       # FastAPI HTTP server
+├── docker-compose.yml         # Docker deployment
+├── Dockerfile                 # Container image
+└── pyproject.toml             # Package configuration
 ```
 
 ## Performance
@@ -536,7 +341,7 @@ local-telemetry/
 | `start_run` | < 10ms | NDJSON + DB insert |
 | `log_event` | < 5ms | NDJSON only |
 | `end_run` | < 50ms | NDJSON + DB update + optional API |
-| Throughput | > 20 writes/sec | With WAL mode |
+| Throughput | > 20 writes/sec | DELETE journal mode |
 
 ## Development
 
@@ -546,6 +351,9 @@ pip install -e ".[dev]"
 
 # Run tests
 pytest tests/ -v
+
+# Run contract tests only
+pytest tests/ -m contract -v
 
 # Run specific test
 pytest tests/test_client.py -v
@@ -557,5 +365,4 @@ See LICENSE file for details.
 
 ## Support
 
-- Issues: [GitHub Issues](https://github.com/your-org/local-telemetry/issues)
 - Documentation: [docs/README.md](docs/README.md)

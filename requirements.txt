@@ -15,6 +15,5 @@ google-auth-oauthlib==1.1.0
 google-auth-httplib2==0.1.1
 google-api-python-client==2.100.0
 
-# Development/Testing (optional - pytest moved to requirements-dev.txt to avoid version conflicts)
-pytest-asyncio>=0.23.0  # Requires >=0.23 for pytest 8.x compatibility
+# Testing (httpx used by test suite for HTTP API testing)
 httpx==0.25.0

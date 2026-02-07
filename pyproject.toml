@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "telemetry"
-version = "0.1.0"
+version = "3.0.0"
 description = "Multi-agent telemetry platform for tracking agent runs, metrics, and performance"
 readme = "README.md"
 requires-python = ">=3.9,<3.14"
@@ -13,7 +13,7 @@ authors = [
 ]
 keywords = ["telemetry", "monitoring", "agents", "metrics"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",

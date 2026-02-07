@@ -155,9 +155,10 @@ junit_*.xml
 *.lmdb
 *.mdb
 
-# Telemetry storage directories (runtime data, not source)
-# These are created by setup_storage.py at runtime locations like D:\agent-metrics
-# Do NOT track runtime telemetry data
+# Telemetry runtime data directories (not source)
+/data/
+/config/
+/monitoring/
 
 # -----------------------------------------------------------------------------
 # Secrets and credentials (CRITICAL - never commit these)

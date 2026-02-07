@@ -1,4 +1,9 @@
 # Development and testing dependencies
 pytest>=8.0.0
 pytest-cov>=4.1.0
-PyYAML>=6.0  # Required for contract tests (docker-compose validation)
+pytest-asyncio>=0.23.0
+pytest-timeout>=2.2.0
+pytest-xdist>=3.5.0
+PyYAML>=6.0
+black>=23.0.0
+ruff>=0.1.0
