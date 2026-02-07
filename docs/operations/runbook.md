@@ -1,87 +1,74 @@
 # Telemetry Platform Runbook
 
-Note: CLI/flags are canonical in `../reference/cli.md`. This runbook focuses on actions and sequencing.
-
-**System:** Local Telemetry Platform
-**Owner:** Local Telemetry Team
-**Last Updated:** 2025-12-11
-
----
-
-## System Overview
-
-**Purpose:** Track agent runs, metrics, and performance
-**Storage:** `D:\agent-metrics` (local Windows storage)
-**Database:** SQLite at `D:\agent-metrics\db\telemetry.sqlite`
-**Environment:** Windows, Python 3.9-3.13
+**System:** Local Telemetry Platform v3.0.0
+**Deployment:** Docker (`docker-compose.yml`)
+**Database:** SQLite at `/data/telemetry.sqlite` (inside container)
 
 ---
 
 ## Health Checks
 
-### Daily Health Check (5 minutes)
+### Quick Health Check
 
 ```bash
-# Run automated health check
-python scripts/monitor_telemetry_health.py
+curl http://localhost:8765/health
+# Expected: {"status": "ok", "version": "3.0.0", ...}
 
-# Expected: Exit code 0, all checks OK
+curl http://localhost:8765/metrics
+# Shows total runs, agent counts, recent activity
 ```
 
-**If failures detected:** See Recovery Procedures
-
-### Manual Health Verification
+### Docker Health
 
 ```bash
-# 1. Check storage exists
-dir D:\agent-metrics
+docker compose ps
+# Should show "Up (healthy)"
 
-# 2. Check database accessible
-sqlite3 D:\agent-metrics\db\telemetry.sqlite "SELECT COUNT(*) FROM agent_runs;"
+docker compose logs --tail=20 local-telemetry-api
+# Check for errors
+```
 
-# 3. Check recent activity
-python -c "import sqlite3; from datetime import datetime, timedelta, timezone; conn = sqlite3.connect('D:\\agent-metrics\\db\\telemetry.sqlite'); cursor = conn.cursor(); cursor.execute('SELECT COUNT(*) FROM agent_runs WHERE start_time >= ?', ((datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),)); print(f'Runs last 24h: {cursor.fetchone()[0]}'); conn.close()"
+### Manual Verification
 
-# 4. Check disk space
-python -c "import shutil; total, used, free = shutil.disk_usage('D:\\agent-metrics'); print(f'Free: {free/(1024**3):.1f} GB')"
+```bash
+# Check recent activity
+curl "http://localhost:8765/api/v1/runs?limit=5"
+
+# Check metadata (agents and job types)
+curl http://localhost:8765/api/v1/metadata
 ```
 
 ---
 
 ## Common Operations
 
-### Query Recent Runs
+### Query Runs via API
 
 ```bash
-sqlite3 D:\agent-metrics\db\telemetry.sqlite "SELECT run_id, agent_name, job_type, status, start_time FROM agent_runs ORDER BY start_time DESC LIMIT 20;"
+# Recent runs
+curl "http://localhost:8765/api/v1/runs?limit=20"
+
+# Filter by agent
+curl "http://localhost:8765/api/v1/runs?agent_name=my-agent&limit=10"
+
+# Filter by status
+curl "http://localhost:8765/api/v1/runs?status=failure&limit=10"
 ```
 
-### Query by Agent
+### Query via SQLite
 
 ```bash
-sqlite3 D:\agent-metrics\db\telemetry.sqlite "SELECT COUNT(*), SUM(items_discovered), SUM(items_succeeded) FROM agent_runs WHERE agent_name = 'seo-intelligence';"
-```
-
-### Query Workflow Chain
-
-```bash
-sqlite3 D:\agent-metrics\db\telemetry.sqlite "SELECT run_id, job_type, status FROM agent_runs WHERE insight_id = '[insight_id]' ORDER BY start_time;"
+docker compose exec local-telemetry-api sqlite3 /data/telemetry.sqlite \
+  "SELECT event_id, agent_name, status, created_at FROM agent_runs ORDER BY created_at DESC LIMIT 20;"
 ```
 
 ### Create Backup
 
 ```bash
-python scripts/backup_telemetry_db.py
+docker compose cp local-telemetry-api:/data/telemetry.sqlite ./backup_$(date +%Y%m%d).sqlite
 ```
 
-**Backups stored:** `D:\agent-metrics\backups\`
-**Retention:** 7 days
-
-### View NDJSON Logs
-
-```bash
-type D:\agent-metrics\raw\events_20251211.ndjson | more
-```
+See `../guides/backup-and-restore.md` for full backup/restore procedures.
 
 ---
 
@@ -90,165 +77,101 @@ type D:\agent-metrics\raw\events_20251211.ndjson | more
 ### Database Locked
 
 **Symptoms:** "database is locked" errors
-**Cause:** Concurrent write contention
+**Cause:** Concurrent write contention or multiple workers.
 
 **Recovery:**
-1. Wait 30 seconds (auto-retry should resolve)
-2. If persists, check for hanging processes:
-   ```bash
-   tasklist | findstr python
-   ```
-3. Kill any stalled Python processes
-4. Retry operation
+1. Verify `TELEMETRY_API_WORKERS=1` in docker-compose.yml.
+2. Wait 30 seconds (auto-retry should resolve).
+3. If persistent: `docker compose restart`
+4. Check no other processes accessing the DB directly.
 
 ### Database Corrupted
 
 **Symptoms:** "disk I/O error", "database disk image is malformed"
 
 **Recovery:**
-1. Stop all agents writing telemetry
-2. Run integrity check:
-   ```bash
-   sqlite3 D:\agent-metrics\db\telemetry.sqlite "PRAGMA integrity_check;"
-   ```
-3. If not "ok", restore from backup:
-   ```bash
-   python scripts/backup_telemetry_db.py --restore D:\agent-metrics\backups\telemetry_backup_[latest].sqlite
-   ```
-4. Restart agents
+1. Stop service: `docker compose stop`
+2. Check integrity: `sqlite3 backup.sqlite "PRAGMA integrity_check;"`
+3. Restore from backup: see `../guides/backup-and-restore.md`
+4. Restart: `docker compose start`
 
 ### Disk Full
 
 **Symptoms:** "No space left on device"
 
 **Recovery:**
-1. Check disk space:
-   ```bash
-   python -c "import shutil; total, used, free = shutil.disk_usage('D:\\'); print(f'Free: {free/(1024**3):.1f} GB')"
-   ```
-2. If < 1GB, archive old NDJSON files:
-   ```bash
-   cd D:\agent-metrics\raw
-   # Compress files older than 30 days
-   # Move to archive location
-   ```
-3. Consider moving metrics to larger disk
+1. Check Docker volume usage: `docker system df`
+2. Run retention cleanup: `docker compose exec local-telemetry-api python scripts/db_retention_policy_batched.py --days 30`
+3. Prune Docker: `docker system prune`
+4. Consider increasing disk allocation.
 
 ### No Recent Activity
 
-**Symptoms:** Health check shows 0 runs in last hour
-
 **Investigation:**
-1. Check if agents are running
-2. Check if telemetry integration working:
-   ```python
-   from telemetry import TelemetryClient
-   client = TelemetryClient.from_env()
-   with client.track_run("test", "healthcheck") as ctx:
-       ctx.update_metrics(items_discovered=1)
-   # Should complete without error
-   ```
-3. Check environment variable set:
-   ```bash
-   echo %AGENT_METRICS_DIR%
-   ```
+1. Check API health: `curl http://localhost:8765/health`
+2. Check if agents are posting: `docker compose logs --tail=50 local-telemetry-api`
+3. Verify agents have correct `TELEMETRY_API_URL`.
 
 ---
 
 ## Maintenance Tasks
 
 ### Weekly
-
-- [ ] Run health check
-- [ ] Review backup retention
-- [ ] Check disk space trend
+- Check API health endpoint
+- Review Docker logs for errors
+- Verify backup schedule is running
 
 ### Monthly
-
-- [ ] Review database size growth
-- [ ] Archive old NDJSON files (> 90 days)
-- [ ] Update documentation if needed
+- Review database size growth
+- Run retention cleanup if not automated
+- Check disk space trend
 
 ### Quarterly
+- Review query performance (check `curl http://localhost:8765/metrics`)
+- Update retention policies if needed
+- Consider running `VACUUM` on large databases
 
-- [ ] Review query performance
-- [ ] Consider adding indexes if queries slow
-- [ ] Update retention policies if needed
+---
+
+## Alerting Thresholds
+
+| Metric | Normal | Warning | Critical |
+|--------|--------|---------|----------|
+| Health endpoint | 200 OK | N/A | Non-200 or timeout |
+| Recent 24h runs | > 0 | 0 for > 2h | 0 for > 6h |
+| DB size | < 500MB | 500MB-1GB | > 1GB |
+| Error rate | < 5% | 5-15% | > 15% |
+
+**Alert response:**
+- **Warning:** Investigate within 2 hours. Check logs and agent health.
+- **Critical:** Respond within 15 minutes. Check service health, restart if needed.
 
 ---
 
 ## Performance Baselines
 
-**Write Latency:** p95 < 50ms
-**Query Latency:** Simple queries < 100ms
-**Throughput:** > 20 writes/second
-**Database Size:** ~100 bytes/run
+| Metric | Target |
+|--------|--------|
+| Write latency (p95) | < 50ms |
+| Query latency (simple) | < 100ms |
+| Throughput | > 20 writes/second |
+| Database size per run | ~100 bytes |
 
-**If metrics degrade:**
-1. Run performance test: `python scripts/measure_performance.py`
-2. Check for database fragmentation
-3. Consider running VACUUM
-4. Check disk I/O performance
+If metrics degrade, check disk I/O performance and consider running `VACUUM`.
 
 ---
 
 ## Escalation
 
-### Level 1: Automated Monitoring
-- Health check script failures → Alert
-
-### Level 2: Manual Investigation
-- Follow recovery procedures
-- Check logs
-
-### Level 3: Development Team
-- If recovery procedures fail
-- If data corruption
-- If performance degradation
-
-**Contact:** Development Team
-
----
-
-## Emergency Procedures
-
-### Complete System Failure
-
-1. **Assess:** What's broken?
-   - Storage inaccessible?
-   - Database corrupted?
-   - Disk full?
-
-2. **Stabilize:** Stop agents from writing
-
-3. **Restore:**
-   - Restore database from latest backup
-   - Verify integrity
-   - Re-initialize if needed
-
-4. **Verify:**
-   ```bash
-   python scripts/validate_installation.py
-   ```
-
-5. **Resume:** Restart agents
-
-### Data Loss Recovery
-
-**If backup exists:**
-```bash
-python scripts/backup_telemetry_db.py --restore [backup-file]
-```
-
-**If no backup:**
-- NDJSON files contain all raw data
-- Can rebuild database from NDJSON (script needed)
-- Contact development team
+1. **Self-service:** Follow recovery procedures above.
+2. **If recovery fails:** Check `troubleshooting.md`.
+3. **Data corruption:** Restore from backup, report to development team.
 
 ---
 
 ## Change Log
 
-| Date | Change | Author |
-|------|--------|--------|
-| 2025-12-11 | Initial runbook | Telemetry Team |
+| Date | Change |
+|------|--------|
+| 2026-02-07 | Updated for v3.0.0, Docker-first operations |
+| 2025-12-11 | Initial runbook |

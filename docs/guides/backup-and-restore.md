@@ -1,42 +1,80 @@
-# Backup and Restore Guide (Operators)
+# Backup and Restore Guide
 
-## Prerequisites
-- Storage configured (`AGENT_METRICS_DIR` / `TELEMETRY_BASE_DIR` / `TELEMETRY_DB_PATH`).
-- SQLite available on PATH.
+## Docker Backup (Recommended)
 
-## Backup (daily/automated)
-1. Run hot backup:
+### Quick Backup
+```bash
+docker compose cp local-telemetry-api:/data/telemetry.sqlite ./backup_$(date +%Y%m%d).sqlite
+```
+
+### Scripted Backup (Windows)
+```powershell
+.\scripts\backup_docker_telemetry.ps1
+```
+
+### Restore
+```bash
+docker compose stop
+docker compose cp ./backup_file.sqlite local-telemetry-api:/data/telemetry.sqlite
+docker compose start
+```
+
+### Restore (Windows script)
+```powershell
+.\scripts\restore_docker_backup.ps1
+```
+
+## Automated Backup Schedule
+
+Use `scripts/setup_docker_backup_task.ps1` to create a Windows Task Scheduler task for daily backups.
+
+## Validate Backup Integrity
+
+```bash
+sqlite3 backup_file.sqlite "PRAGMA integrity_check;"
+```
+
+Expected output: `ok`
+
+## Retention Policy
+
+The platform includes automated retention to manage database growth:
+
+```bash
+# Run inside Docker container
+docker compose exec local-telemetry-api python scripts/db_retention_policy_batched.py --days 30
+
+# Or via Windows scheduled task
+.\scripts\docker_retention_cleanup.ps1
+```
+
+Default: 30-day retention. Set `TELEMETRY_DRY_RUN_CLEANUP=0` to enable actual deletion (default is dry-run mode).
+
+Automate with: `scripts/setup_docker_retention_task.ps1`
+
+## Recovery from NDJSON (Corruption)
+
+When SQLite is corrupted and no backup is viable, rebuild from NDJSON files in `{metrics_dir}/raw/`.
+
+1. **Check integrity (no changes):**
    ```bash
-   python scripts/backup_database.py --keep 7
+   docker compose exec local-telemetry-api sqlite3 /data/telemetry.sqlite "PRAGMA integrity_check;"
    ```
-   - Uses SQLite backup API; verifies integrity before/after.
-   - Backups saved to `{metrics_dir}/backups/telemetry.backup.{date}.sqlite`.
-2. Optional alternative with retention by days:
+
+2. **If corrupted, stop the service:**
    ```bash
-   python scripts/backup_telemetry_db.py --keep-days 7
+   docker compose stop
    ```
-   - Creates `telemetry_backup_{timestamp}.sqlite`; verifies integrity.
 
-## Restore (from backup_telemetry_db)
-1. Run interactive restore:
-   ```bash
-   python scripts/backup_telemetry_db.py --restore path/to/telemetry_backup_YYYYMMDD_HHMMSS.sqlite
+3. **Restore from latest backup** (preferred). If no backup exists, the NDJSON files in `raw/` contain all events and can be replayed to rebuild the database.
+
+4. **Post-recovery:** Verify schema version matches current:
+   ```sql
+   SELECT MAX(version) FROM schema_migrations;
    ```
-   - Creates safety backup of current DB before overwrite.
-   - Verifies restored DB with `PRAGMA integrity_check`.
+   If it shows an older version, run `python scripts/setup_database.py` to align.
 
-## Rotate/clean
-- `backup_database.py --keep N` deletes older backups beyond N.
-- `backup_telemetry_db.py --keep-days N` removes backups older than N days (keeps most recent).
-
-## Validate
-- Check backup integrity manually:
-  ```bash
-  sqlite3 {metrics_dir}/backups/telemetry.backup.20251215.sqlite "PRAGMA integrity_check;"
-  ```
-- Confirm recent backup timestamps in `{metrics_dir}/backups`.
+NDJSON files are the append-only source of truth -- keep `{metrics_dir}/raw` intact for replay capability.
 
 ## Notes
-- Backups rely on correct `metrics_dir`; see `reference/config.md`.
-- Recovery from NDJSON (for corruption) uses `scripts/recover_database.py` — see `guides/recovery-from-ndjson.md`.
-- File naming and layout: see `reference/file-contracts.md`.
+- Backups rely on correct `TELEMETRY_DB_PATH`; see `../reference/config.md`.

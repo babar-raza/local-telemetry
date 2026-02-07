@@ -2,9 +2,11 @@
 
 ## Prerequisites
 
-- Python 3.9-3.13
+- Python 3.9+
 - pip
 - Git
+- Docker (for running the API)
+- `httpx` (optional; required for API posting tests)
 
 ## Setup
 
@@ -16,40 +18,39 @@ cd local-telemetry
 # Install in development mode with dev dependencies
 pip install -e ".[dev]"
 
-# Initialize storage (creates D:\agent-metrics or C:\agent-metrics)
-python scripts/setup_storage.py
-
-# Create database schema
+# Create database schema (local development only)
 python scripts/setup_database.py
 
-# Validate installation
-python scripts/validate_installation.py
+# Run tests
+pytest -v
 ```
 
 ## Project Structure
 
 ```
 local-telemetry/
-├── src/
-│   └── telemetry/          # Main package
-│       ├── __init__.py     # Public API exports
-│       ├── api.py          # API client for remote posting
-│       ├── client.py       # TelemetryClient, RunContext
-│       ├── config.py       # TelemetryConfig
-│       ├── database.py     # SQLite DatabaseWriter
-│       ├── local.py        # NDJSON NDJSONWriter
-│       ├── models.py       # Data models (RunRecord, etc.)
-│       └── schema.py       # Database schema definitions
-├── tests/
-│   ├── integration/        # Integration tests
-│   ├── stress/             # Stress/load tests
-│   ├── edge_cases/         # Edge case tests
-│   ├── smoke_test.py       # Quick validation
-│   └── test_*.py           # Unit tests
-├── scripts/                # Utility scripts
-├── config/                 # Configuration files
+├── src/telemetry/          # Core library
+│   ├── __init__.py         # Public API exports
+│   ├── api.py              # Google Sheets API client
+│   ├── buffer.py           # Local NDJSON buffer for failover
+│   ├── client.py           # TelemetryClient, RunContext
+│   ├── config.py           # TelemetryConfig
+│   ├── database.py         # SQLite DatabaseWriter
+│   ├── git_detector.py     # Auto-detect git metadata
+│   ├── http_client.py      # HTTP API client
+│   ├── local.py            # NDJSONWriter
+│   ├── models.py           # Data models (RunRecord, etc.)
+│   ├── schema.py           # Database schema definitions
+│   ├── single_writer_guard.py  # File lock management
+│   ├── status.py           # Status normalization
+│   └── url_builder.py      # URL construction helpers
+├── telemetry_service.py    # FastAPI HTTP server (entry point)
+├── scripts/                # Operational scripts
+├── tests/                  # Test suite
+├── migrations/             # SQL schema migrations
+├── schema/                 # SQL schema files
 ├── docs/                   # Documentation
-└── pyproject.toml          # Project configuration
+└── pyproject.toml          # Package configuration
 ```
 
 ## Running Tests
@@ -64,7 +65,10 @@ pytest -v
 # Run specific test file
 pytest tests/test_client.py
 
-# Run integration tests only
+# Run contract tests
+pytest tests/contract/ -v
+
+# Run integration tests (requires API running)
 pytest tests/integration/ -v
 
 # Run with coverage
@@ -72,22 +76,14 @@ pytest --cov=src/telemetry --cov-report=term-missing
 
 # Run smoke test directly
 python tests/smoke_test.py
-```
 
-Alternatively, use the test runner script:
-
-```bash
-python scripts/run_tests.py              # All tests
-python scripts/run_tests.py --unit       # Unit tests only
-python scripts/run_tests.py --integration # Integration tests
-python scripts/run_tests.py --smoke      # Smoke test only
-python scripts/run_tests.py --coverage   # With coverage
+# Skip API-dependent tests
+pytest -m "not integration"
 ```
 
 ## Code Style
 
 The project uses:
-
 - **Black** for formatting (line length: 100)
 - **Ruff** for linting
 - **Type hints** throughout
@@ -122,28 +118,34 @@ ruff check --fix src/ tests/
 ### Database Schema Changes
 
 1. Increment `SCHEMA_VERSION` in `schema.py` and `models.py`
-2. Add migration script in `scripts/`
+2. Add migration SQL file in `migrations/`
 3. Update `TABLES` dictionary in `schema.py`
 4. Test migration path from previous version
 
-## Testing Against Real Storage
+## Continuous Integration
 
-Tests can run against real storage:
+Tests are designed to run in CI environments:
 
-```bash
-# Set environment for real storage testing
-export TELEMETRY_TEST_MODE=live
-export AGENT_METRICS_DIR=D:\agent-metrics
+```yaml
+# CI workflow example
+- name: Install dependencies
+  run: pip install -e ".[dev]"
 
-# Run integration tests
-pytest tests/integration/ -v
+- name: Start API server
+  run: |
+    python telemetry_service.py &
+    sleep 5
+
+- name: Run tests
+  env:
+    TELEMETRY_SKIP_VALIDATION: "true"
+  run: pytest -v --cov=src/telemetry --cov-report=xml
 ```
 
-Or use mock mode (no real writes):
-
+**Environment variables for CI:**
 ```bash
-export TELEMETRY_TEST_MODE=mock
-pytest tests/
+TELEMETRY_SKIP_VALIDATION=true    # Skip directory validation
+TEST_API_BASE_URL=http://localhost:8765
 ```
 
 ## Debugging
@@ -158,47 +160,12 @@ logging.basicConfig(level=logging.DEBUG)
 ### Inspect Database
 
 ```bash
-sqlite3 D:\agent-metrics\db\telemetry.sqlite
+# Via Docker
+docker compose exec local-telemetry-api sqlite3 /data/telemetry.sqlite
 
 # Useful queries
 .schema                                    # Show all tables
 SELECT * FROM agent_runs LIMIT 10;         # Recent runs
 SELECT * FROM schema_migrations;           # Schema versions
 PRAGMA integrity_check;                    # Check DB health
-```
-
-### Inspect NDJSON
-
-```bash
-# View today's events
-type D:\agent-metrics\raw\events_YYYYMMDD.ndjson
-
-# Count records
-python -c "print(sum(1 for _ in open(r'D:\agent-metrics\raw\events_YYYYMMDD.ndjson')))"
-```
-
-## Scripts Reference
-
-| Script | Purpose |
-|--------|---------|
-| `setup_storage.py` | Create directory structure |
-| `setup_database.py` | Initialize SQLite schema |
-| `validate_installation.py` | Verify everything works |
-| `backup_telemetry_db.py` | Backup database |
-| `monitor_telemetry_health.py` | Health check |
-| `measure_performance.py` | Performance benchmarks |
-| `recover_database.py` | Database recovery |
-| `run_tests.py` | Test runner |
-
-## Continuous Integration
-
-Tests are designed to run in CI environments:
-
-```yaml
-# Example GitHub Actions
-- name: Run tests
-  run: |
-    pip install -e ".[dev]"
-    export TELEMETRY_SKIP_VALIDATION=true
-    pytest -v
 ```
